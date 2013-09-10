@@ -146,6 +146,7 @@ public class CBLRouter implements Observer {
     public Map<String,Object> getBodyAsDictionary() {
         try {
             InputStream contentStream = connection.getRequestInputStream();
+            Log.d(CBLDatabase.TAG, "getBodyAsDictionary() called.  contentStream.available(): " + contentStream.available());
             Map<String,Object> bodyMap = CBLServer.getObjectMapper().readValue(contentStream, Map.class);
             return bodyMap;
         } catch (IOException e) {
