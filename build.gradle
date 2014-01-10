@@ -47,6 +47,13 @@ android {
         minSdkVersion 9
         targetSdkVersion 16
     }
+
+    // Needed to work around https://code.google.com/p/android/issues/detail?id=61573#c14
+    packagingOptions {
+        exclude 'META-INF/LICENSE'
+        exclude 'META-INF/NOTICE'
+        exclude 'META-INF/ASL2.0'
+    }
 }
 
 task createMavenDirectory(type: Exec) {
