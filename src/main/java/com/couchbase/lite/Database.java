@@ -40,6 +40,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.security.Principal;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -3095,7 +3096,8 @@ public class Database {
     }
 
     @InterfaceAudience.Private
-    public Replication getReplicator(URL remote, HttpClientFactory httpClientFactory, boolean push, boolean continuous, ScheduledExecutorService workExecutor) {
+    public Replication getReplicator(URL remote, HttpClientFactory httpClientFactory, boolean push, boolean continuous,
+                                     ScheduledExecutorService workExecutor) {
         Replication result = getActiveReplicator(remote, push);
         if(result != null) {
             return result;

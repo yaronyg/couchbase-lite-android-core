@@ -1,6 +1,7 @@
 package com.couchbase.lite.auth;
 
 import com.couchbase.lite.Database;
+import com.couchbase.lite.support.HttpClientFactory;
 import com.couchbase.lite.util.Base64;
 import com.couchbase.lite.util.Log;
 
@@ -15,7 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class PersonaAuthorizer extends Authorizer {
+public class PersonaAuthorizer implements Authorizer {
 
     public static final String LOGIN_PARAMETER_ASSERTION = "assertion";
 
@@ -99,6 +100,11 @@ public class PersonaAuthorizer extends Authorizer {
 
     public String loginPathForSite(URL site) {
         return "/_persona";
+    }
+
+    @Override
+    public HttpClientFactory getHttpClientFactory() {
+        return null;
     }
 
     public synchronized static String registerAssertion(String assertion) {

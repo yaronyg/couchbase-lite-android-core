@@ -1,12 +1,6 @@
 package com.couchbase.lite.replicator;
 
-import com.couchbase.lite.Database;
-import com.couchbase.lite.Emitter;
-import com.couchbase.lite.LiteTestCase;
-import com.couchbase.lite.LiveQuery;
-import com.couchbase.lite.Mapper;
-import com.couchbase.lite.Status;
-import com.couchbase.lite.View;
+import com.couchbase.lite.*;
 import com.couchbase.lite.auth.FacebookAuthorizer;
 import com.couchbase.lite.internal.Body;
 import com.couchbase.lite.internal.RevisionInternal;
@@ -14,16 +8,10 @@ import com.couchbase.lite.support.Base64;
 import com.couchbase.lite.support.HttpClientFactory;
 import com.couchbase.lite.threading.BackgroundTask;
 import com.couchbase.lite.util.Log;
-
 import junit.framework.Assert;
-
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.output.ByteArrayOutputStream;
-import org.apache.http.Header;
-import org.apache.http.HttpRequest;
-import org.apache.http.HttpResponse;
-import org.apache.http.HttpStatus;
-import org.apache.http.StatusLine;
+import org.apache.http.*;
 import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
@@ -36,11 +24,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -419,7 +403,7 @@ public class ReplicationTest extends LiteTestCase {
         properties.put("source", DEFAULT_TEST_DB);
         properties.put("target", getReplicationURL().toExternalForm());
 
-        Replication replicator = manager.getReplicator(properties);
+        Replication replicator = manager.getReplicator(properties, null);
         assertNotNull(replicator);
         assertEquals(getReplicationURL().toExternalForm(), replicator.getRemoteUrl().toExternalForm());
         assertTrue(!replicator.isPull());
@@ -431,7 +415,7 @@ public class ReplicationTest extends LiteTestCase {
 
         // now lets lookup existing replicator and stop it
         properties.put("cancel", true);
-        Replication activeReplicator = manager.getReplicator(properties);
+        Replication activeReplicator = manager.getReplicator(properties, null);
         activeReplicator.stop();
         assertFalse(activeReplicator.isRunning());
 
@@ -441,7 +425,7 @@ public class ReplicationTest extends LiteTestCase {
 
         Map<String, Object> properties = getPushReplicationParsedJson();
 
-        Replication replicator = manager.getReplicator(properties);
+        Replication replicator = manager.getReplicator(properties, null);
         assertNotNull(replicator);
         assertNotNull(replicator.getAuthorizer());
         assertTrue(replicator.getAuthorizer() instanceof FacebookAuthorizer);
@@ -552,7 +536,7 @@ public class ReplicationTest extends LiteTestCase {
 
         // start a replicator
         Map<String,Object> properties = getPullReplicationParsedJson();
-        Replication replicator = manager.getReplicator(properties);
+        Replication replicator = manager.getReplicator(properties, null);
         replicator.start();
 
         boolean foundError = false;

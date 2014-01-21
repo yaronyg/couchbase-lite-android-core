@@ -1,22 +1,8 @@
 package com.couchbase.lite.router;
 
 
-import com.couchbase.lite.Attachment;
-import com.couchbase.lite.ChangesOptions;
-import com.couchbase.lite.CouchbaseLiteException;
-import com.couchbase.lite.Database;
+import com.couchbase.lite.*;
 import com.couchbase.lite.Database.TDContentOptions;
-import com.couchbase.lite.DocumentChange;
-import com.couchbase.lite.Manager;
-import com.couchbase.lite.Misc;
-import com.couchbase.lite.QueryOptions;
-import com.couchbase.lite.QueryRow;
-import com.couchbase.lite.Reducer;
-import com.couchbase.lite.ReplicationFilter;
-import com.couchbase.lite.Mapper;
-import com.couchbase.lite.RevisionList;
-import com.couchbase.lite.Status;
-import com.couchbase.lite.View;
 import com.couchbase.lite.View.TDViewCollation;
 import com.couchbase.lite.auth.FacebookAuthorizer;
 import com.couchbase.lite.auth.PersonaAuthorizer;
@@ -24,7 +10,6 @@ import com.couchbase.lite.internal.Body;
 import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.replicator.Replication;
 import com.couchbase.lite.util.Log;
-
 import org.apache.http.client.HttpResponseException;
 
 import java.io.ByteArrayInputStream;
@@ -35,14 +20,7 @@ import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLDecoder;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 
 public class Router implements Database.ChangeListener {
@@ -281,7 +259,8 @@ public class Router implements Database.ChangeListener {
     }
 
     public void start() {
-        if (requestAuthorization != null && requestAuthorization.Authorize(manager, connection) == false) {
+
+        if ((requestAuthorization != null) && (requestAuthorization.Authorize(manager, connection) == false)) {
             sendResponse();
             return;
         }
@@ -565,7 +544,7 @@ public class Router implements Database.ChangeListener {
         }
 
         try {
-            replicator = manager.getReplicator(body);
+            replicator = manager.getReplicator(body, connection.getPrincipal());
         } catch (CouchbaseLiteException e) {
             Map<String, Object> result = new HashMap<String, Object>();
             result.put("error", e.toString());
@@ -580,6 +559,7 @@ public class Router implements Database.ChangeListener {
             replicator.start();
             Map<String,Object> result = new HashMap<String,Object>();
             result.put("session_id", replicator.getSessionID());
+            result.put("ok", true);
             connection.setResponseBody(new Body(result));
         } else {
             // Cancel replication:
@@ -835,10 +815,13 @@ public class Router implements Database.ChangeListener {
         }
         //   allowConflict If false, an error status 409 will be returned if the insertion would create a conflict, i.e. if the previous revision already has a child.
         boolean allOrNothing = (allObj && allObj != false);
-        boolean noNewEdits = true;
-        if(getQuery("new_edits") == null || (getQuery("new_edits") != null && (new Boolean(getQuery("new_edits"))))) {
-        	noNewEdits = false;
-        }
+        boolean new_edits =
+                bodyDict.containsKey("new_edits") ?
+                        (Boolean) bodyDict.get("new_edits") :
+                        getQuery("new_edits") != null ?
+                                new Boolean(getQuery("new_edits")) :
+                                true;
+        boolean noNewEdits = !new_edits;
         boolean ok = false;
         db.beginTransaction();
         List<Map<String,Object>> results = new ArrayList<Map<String,Object>>();
@@ -855,6 +838,7 @@ public class Router implements Database.ChangeListener {
                     } else {
                         List<String> history = Database.parseCouchDBRevisionHistory(doc);
                         db.forceInsert(rev, history, null);
+                        status = new Status(Status.OK);
                     }
                 } else {
                     Status outStatus = new Status();

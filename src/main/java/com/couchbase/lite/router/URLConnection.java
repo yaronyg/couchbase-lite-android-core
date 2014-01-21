@@ -10,6 +10,7 @@ import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.ProtocolException;
 import java.net.URL;
+import java.security.Principal;
 import java.util.*;
 import java.util.Map.Entry;
 
@@ -22,6 +23,7 @@ public class URLConnection extends HttpURLConnection {
     private Body responseBody;
     private boolean chunked = false;
     private SSLSession sslSession = null;
+    private Principal principal = null;
 
     private HashMap<String, List<String>> requestProperties = new HashMap<String, List<String>>();
 
@@ -263,6 +265,19 @@ public class URLConnection extends HttpURLConnection {
         }
 
         this.sslSession = sslSession;
+    }
+
+    /**
+     * If there is an authenticated principal associated with this connection then it will be returned here. Otherwise
+     * null.
+     * @return
+     */
+    public Principal getPrincipal() {
+        return this.principal;
+    }
+
+    public void setPrincipal(Principal principal) {
+        this.principal = principal;
     }
 }
 

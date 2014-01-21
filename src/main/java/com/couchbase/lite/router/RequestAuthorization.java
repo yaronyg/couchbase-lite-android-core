@@ -8,6 +8,9 @@ public interface RequestAuthorization {
      * returned then it is assumed that the Authorize code has set up the urlConnection object
      * with the proper error code, headers, response body (if any), etc. Router's only
      * responsibility if it detects a 'false' is to send the connection immediately and exit.
+     *
+     * Note that the code can also call setPrincipal on urlConnection if it wishes to change the principal
+     * based on available data.
      * @param manager
      * @param urlConnection
      * @return

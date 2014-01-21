@@ -1,6 +1,7 @@
 package com.couchbase.lite.auth;
 
 import com.couchbase.lite.Database;
+import com.couchbase.lite.support.HttpClientFactory;
 import com.couchbase.lite.util.Log;
 
 import java.net.URL;
@@ -9,7 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class FacebookAuthorizer extends Authorizer {
+public class FacebookAuthorizer implements Authorizer {
 
     public static final String LOGIN_PARAMETER_ACCESS_TOKEN = "access_token";
     public static final String QUERY_PARAMETER = "facebookAccessToken";
@@ -42,6 +43,11 @@ public class FacebookAuthorizer extends Authorizer {
 
     public String loginPathForSite(URL site) {
         return "/_facebook";
+    }
+
+    @Override
+    public HttpClientFactory getHttpClientFactory() {
+        return null;
     }
 
     public synchronized static String registerAccessToken(String accessToken, String email, String origin) {

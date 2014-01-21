@@ -1,8 +1,7 @@
 package com.couchbase.lite;
 
 import com.couchbase.lite.auth.Authorizer;
-import com.couchbase.lite.auth.FacebookAuthorizer;
-import com.couchbase.lite.auth.PersonaAuthorizer;
+import com.couchbase.lite.auth.AuthorizerFactoryManager;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.replicator.Puller;
 import com.couchbase.lite.replicator.Pusher;
@@ -10,7 +9,6 @@ import com.couchbase.lite.replicator.Replication;
 import com.couchbase.lite.support.FileDirUtils;
 import com.couchbase.lite.support.HttpClientFactory;
 import com.couchbase.lite.util.Log;
-
 import org.codehaus.jackson.map.ObjectMapper;
 
 import java.io.File;
@@ -18,12 +16,8 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.security.Principal;
+import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
@@ -263,17 +257,9 @@ public class Manager {
         return oldFilename.replaceAll(oldExtensionRegex, newExtension);
     }
 
-
-
-
-
-
-
     public Collection<Database> allOpenDatabases() {
         return databases.values();
     }
-
-
 
     /**
      * Asynchronously dispatches a callback to run on a background thread. The callback will be passed
@@ -305,22 +291,6 @@ public class Manager {
         return result;
     }
 
-    private Map<String, Object> parseSourceOrTarget(Map<String,Object> properties, String key) {
-        Map<String, Object> result = new HashMap<String, Object>();
-
-        Object value = properties.get(key);
-
-        if (value instanceof String) {
-            result.put("url", (String)value);
-        }
-        else if (value instanceof Map) {
-            result = (Map<String, Object>) value;
-        }
-        return result;
-
-    }
-
-
     @InterfaceAudience.Private
     Replication replicationWithDatabase(Database db, URL remote, boolean push, boolean create, boolean start) {
         for (Replication replicator : replications) {
@@ -351,10 +321,8 @@ public class Manager {
         return replicator;
     }
 
-
-
     @InterfaceAudience.Private
-    public Replication getReplicator(Map<String,Object> properties) throws CouchbaseLiteException {
+    public Replication getReplicator(Map<String,Object> properties, Principal principal) throws CouchbaseLiteException {
 
         // TODO: in the iOS equivalent of this code, there is: {@"doc_ids", _documentIDs}) - write unit test that detects this bug
         // TODO: ditto for "headers"
@@ -363,67 +331,31 @@ public class Manager {
         Replication repl = null;
         URL remote = null;
 
-        Map<String, Object> remoteMap;
+        ReplicatorArguments replicatorArguments = new ReplicatorArguments(properties, this, principal);
 
-        Map<String, Object> sourceMap = parseSourceOrTarget(properties, "source");
-        Map<String, Object> targetMap = parseSourceOrTarget(properties, "target");
+        // The authorizer is set here so that the authorizer can alter values in the arguments, primarily source and target
+        // to deal with custom URL schemes, before the rest of the processing occurs.
+        AuthorizerFactoryManager authorizerFactoryManager = options.getAuthorizerFactoryManager();
+        authorizer = authorizerFactoryManager == null ? null : options.getAuthorizerFactoryManager().findAuthorizer(replicatorArguments);
 
-        String source = (String)sourceMap.get("url");
-        String target = (String)targetMap.get("url");
-
-        Boolean createTargetBoolean = (Boolean)properties.get("create_target");
-        boolean createTarget = (createTargetBoolean != null && createTargetBoolean.booleanValue());
-
-        Boolean continuousBoolean = (Boolean)properties.get("continuous");
-        boolean continuous = (continuousBoolean != null && continuousBoolean.booleanValue());
-
-        Boolean cancelBoolean = (Boolean)properties.get("cancel");
-        boolean cancel = (cancelBoolean != null && cancelBoolean.booleanValue());
-
-        // Map the 'source' and 'target' JSON params to a local database and remote URL:
-        if(source == null || target == null) {
-            throw new CouchbaseLiteException("source and target are both null", new Status(Status.BAD_REQUEST));
-        }
-
-        boolean push = false;
-
-        Database db = getExistingDatabase(source);
+        Database db;
         String remoteStr = null;
-        if(db != null) {
-            remoteStr = target;
-            push = true;
-            remoteMap = targetMap;
+        if (replicatorArguments.getPush()) {
+            db = getExistingDatabase(replicatorArguments.getSource());
+            remoteStr = replicatorArguments.getTarget();
         } else {
-            remoteStr = source;
-            if(createTarget && !cancel) {
-                db = getDatabase(target);
+            remoteStr = replicatorArguments.getSource();
+            if(replicatorArguments.getCreateTarget() && !replicatorArguments.getCancel()) {
+                db = getDatabase(replicatorArguments.getTarget());
                 if(!db.open()) {
                     throw new CouchbaseLiteException("cannot open database: " + db, new Status(Status.INTERNAL_SERVER_ERROR));
                 }
             } else {
-                db = getExistingDatabase(target);
+                db = getExistingDatabase(replicatorArguments.getTarget());
             }
             if(db == null) {
                 throw new CouchbaseLiteException("database is null", new Status(Status.NOT_FOUND));
             }
-            remoteMap = sourceMap;
-        }
-
-
-        Map<String, Object> authMap = (Map<String, Object>) remoteMap.get("auth");
-        if (authMap != null) {
-
-            Map<String, Object> persona = (Map<String, Object>) authMap.get("persona");
-            if (persona != null) {
-                String email = (String) persona.get("email");
-                authorizer = new PersonaAuthorizer(email);
-            }
-            Map<String, Object> facebook = (Map<String, Object>) authMap.get("facebook");
-            if (facebook != null) {
-                String email = (String) facebook.get("email");
-                authorizer = new FacebookAuthorizer(email);
-            }
-
         }
 
         try {
@@ -431,13 +363,11 @@ public class Manager {
         } catch (MalformedURLException e) {
             throw new CouchbaseLiteException("malformed remote url: " + remoteStr, new Status(Status.BAD_REQUEST));
         }
-        if(remote == null || !remote.getProtocol().startsWith("http")) {
-            throw new CouchbaseLiteException("remote URL is null or non-http: " + remoteStr, new Status(Status.BAD_REQUEST));
-        }
 
-
-        if(!cancel) {
-            repl = db.getReplicator(remote, getDefaultHttpClientFactory(), push, continuous, getWorkExecutor());
+        if(!replicatorArguments.getCancel()) {
+            HttpClientFactory httpClientFactory = authorizer != null && authorizer.getHttpClientFactory() != null ?
+                    authorizer.getHttpClientFactory() : getDefaultHttpClientFactory();
+            repl = db.getReplicator(remote, httpClientFactory, replicatorArguments.getPush(), replicatorArguments.getContinuous(), getWorkExecutor());
             if(repl == null) {
                 throw new CouchbaseLiteException("unable to create replicator with remote: " + remote, new Status(Status.INTERNAL_SERVER_ERROR));
             }
@@ -446,23 +376,25 @@ public class Manager {
                 repl.setAuthorizer(authorizer);
             }
 
-            String filterName = (String)properties.get("filter");
+            if (principal != null) {
+                repl.addPrincipal(principal);
+            }
+
+            String filterName = replicatorArguments.getFilterName();
             if(filterName != null) {
                 repl.setFilter(filterName);
-                Map<String,Object> filterParams = (Map<String,Object>)properties.get("query_params");
+                Map<String,Object> filterParams = replicatorArguments.getQueryParams();
                 if(filterParams != null) {
                     repl.setFilterParams(filterParams);
                 }
             }
 
-            if(push) {
-                ((Pusher)repl).setCreateTarget(createTarget);
+            if(replicatorArguments.getPush()) {
+                ((Pusher)repl).setCreateTarget(replicatorArguments.getCreateTarget());
             }
-
-
         } else {
             // Cancel replication:
-            repl = db.getActiveReplicator(remote, push);
+            repl = db.getActiveReplicator(remote, replicatorArguments.getPush());
             if(repl == null) {
                 throw new CouchbaseLiteException("unable to lookup replicator with remote: " + remote, new Status(Status.NOT_FOUND));
             }

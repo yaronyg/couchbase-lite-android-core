@@ -26,15 +26,9 @@ import org.apache.http.entity.mime.MultipartEntity;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.security.Principal;
+import java.util.*;
+import java.util.concurrent.*;
 
 public abstract class Replication {
 
@@ -62,6 +56,7 @@ public abstract class Replication {
     protected final HttpClientFactory clientFactory;
     private List<ChangeListener> changeListeners;
     protected List<String> documentIDs;
+    protected ConcurrentHashMap<Principal, Boolean> principals = new ConcurrentHashMap<Principal, Boolean>();
 
     protected Map<String, Object> filterParams;
     protected ExecutorService remoteRequestExecutor;
@@ -670,6 +665,26 @@ public abstract class Replication {
                 getHeaders(),
                 onCompletion);
         remoteRequestExecutor.execute(request);
+    }
+
+    public void addPrincipal(Principal principal) {
+        if (principal == null) {
+            throw new IllegalArgumentException();
+        }
+
+        principals.putIfAbsent(principal, true);
+    }
+
+    public boolean removePrincipal(Principal principal) {
+        if (principal == null) {
+            throw new IllegalArgumentException();
+        }
+
+        return principals.remove(principal);
+    }
+
+    public Enumeration<Principal> getPrincipals() {
+        return principals.keys();
     }
 
     /**
