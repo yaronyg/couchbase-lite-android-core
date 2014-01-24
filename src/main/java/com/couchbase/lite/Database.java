@@ -19,16 +19,12 @@ package com.couchbase.lite;
 
 import com.couchbase.lite.internal.AttachmentInternal;
 import com.couchbase.lite.internal.Body;
-import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.internal.InterfaceAudience;
+import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.replicator.Puller;
 import com.couchbase.lite.replicator.Pusher;
 import com.couchbase.lite.replicator.Replication;
-import com.couchbase.lite.storage.ContentValues;
-import com.couchbase.lite.storage.Cursor;
-import com.couchbase.lite.storage.SQLException;
-import com.couchbase.lite.storage.SQLiteStorageEngine;
-import com.couchbase.lite.storage.SQLiteStorageEngineFactory;
+import com.couchbase.lite.storage.*;
 import com.couchbase.lite.support.Base64;
 import com.couchbase.lite.support.FileDirUtils;
 import com.couchbase.lite.support.HttpClientFactory;
@@ -40,14 +36,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
-import java.security.Principal;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -2651,7 +2640,6 @@ public class Database {
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
-
             }
 
             if(prevRevId != null) {
