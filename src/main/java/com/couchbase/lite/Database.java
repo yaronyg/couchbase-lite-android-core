@@ -411,7 +411,7 @@ public class Database {
      * will be deleted.
      */
     @InterfaceAudience.Public
-    public boolean putLocalDocument(Map<String, Object> properties, String id) throws CouchbaseLiteException {
+    public boolean putLocalDocument(String id, Map<String, Object> properties) throws CouchbaseLiteException {
         // TODO: the iOS implementation wraps this in a transaction, this should do the same.
         id = makeLocalDocumentId(id);
         RevisionInternal prevRev = getLocalDocument(id, null);
@@ -586,16 +586,16 @@ public class Database {
      *
      * TODO: the iOS version has a retry loop, so there should be one here too
      *
-     * @param databaseFunction
+     * @param transactionalTask
      */
     @InterfaceAudience.Public
-    public boolean runInTransaction(TransactionTask databaseFunction) {
+    public boolean runInTransaction(TransactionalTask transactionalTask) {
 
         boolean shouldCommit = true;
 
         beginTransaction();
         try {
-            shouldCommit = databaseFunction.run();
+            shouldCommit = transactionalTask.run();
         } catch (Exception e) {
             shouldCommit = false;
             Log.e(Database.TAG, e.toString(), e);
@@ -611,11 +611,11 @@ public class Database {
      * Runs the delegate asynchronously.
      */
     @InterfaceAudience.Public
-    public Future runAsync(final AsyncTask function) {
+    public Future runAsync(final AsyncTask asyncTask) {
         return getManager().runAsync(new Runnable() {
             @Override
             public void run() {
-                function.run(Database.this);
+                asyncTask.run(Database.this);
             }
         });
     }
@@ -665,6 +665,9 @@ public class Database {
         changeListeners.remove(listener);
     }
 
+    /**
+     * Returns a string representation of this database.
+     */
     @InterfaceAudience.Public
     public String toString() {
         return this.getClass().getName() + "[" + path + "]";
@@ -3780,7 +3783,7 @@ public class Database {
     public Map<String, Object> purgeRevisions(final Map<String, List<String>> docsToRevs) {
 
         final Map<String, Object> result = new HashMap<String, Object>();
-        runInTransaction(new TransactionTask() {
+        runInTransaction(new TransactionalTask() {
             @Override
             public boolean run() {
                 for (String docID : docsToRevs.keySet()) {

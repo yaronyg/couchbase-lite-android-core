@@ -350,7 +350,7 @@ public abstract class Replication {
      * Gets the documents to specify as part of the replication.
      */
     @InterfaceAudience.Public
-    public List<String> getDocsIds() {
+    public List<String> getDocIds() {
         return documentIDs;
     }
 
@@ -457,6 +457,11 @@ public abstract class Replication {
         changeListeners.add(changeListener);
     }
 
+    /**
+     * Return a string representation of this replication.
+     *
+     * The credentials will be masked in order to avoid passwords leaking into logs.
+     */
     @Override
     @InterfaceAudience.Public
     public String toString() {
