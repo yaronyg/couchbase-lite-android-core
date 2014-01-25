@@ -11,15 +11,19 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * An unsaved Couchbase Lite Document Revision.
+ */
 public class UnsavedRevision extends Revision {
 
     private Map<String, Object> properties;
 
     /**
      * Constructor
+     * @exclude
      */
     @InterfaceAudience.Private
-    protected UnsavedRevision(Document document, SavedRevision parentRevision) {
+    /* package */ protected UnsavedRevision(Document document, SavedRevision parentRevision) {
 
         super(document);
 
@@ -106,8 +110,7 @@ public class UnsavedRevision extends Revision {
      * want to do, you should use the regular -save: method instead.
      */
     @InterfaceAudience.Public
-    public SavedRevision saveAllowingConflict() throws CouchbaseLiteException {
-        boolean allowConflict = true;
+    public SavedRevision save(boolean allowConflict) throws CouchbaseLiteException {
         return document.putProperties(properties, parentRevID, allowConflict);
     }
 

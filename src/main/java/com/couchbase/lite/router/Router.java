@@ -21,6 +21,10 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 
 public class Router implements Database.ChangeListener {
@@ -38,7 +42,7 @@ public class Router implements Database.ChangeListener {
     private RequestAuthorization requestAuthorization = null;
 
     public static String getVersionString() {
-        return Manager.VERSION_STRING;
+        return Manager.VERSION;
     }
 
     public Router(Manager manager, URLConnection connection) {
@@ -290,11 +294,29 @@ public class Router implements Database.ChangeListener {
             } else {
                 message += "_Database";
                 if (!Manager.isValidDatabaseName(dbName)) {
-                    connection.setResponseCode(Status.NOT_FOUND);
+                    Header resHeader = connection.getResHeader();
+                    if (resHeader != null) {
+                        resHeader.add("Content-Type", "application/json");
+                    }
+                    Map<String, Object> result = new HashMap<String, Object>();
+                    result.put("error", "Invalid database");
+                    result.put("status", Status.BAD_REQUEST );
+                    connection.setResponseBody(new Body(result));
+                    ByteArrayInputStream bais = new ByteArrayInputStream(connection.getResponseBody().getJson());
+                    connection.setResponseInputStream(bais);
+
+                    connection.setResponseCode(Status.BAD_REQUEST);
+                    try {
+                        connection.getResponseOutputStream().close();
+                    } catch (IOException e) {
+                        Log.e(Database.TAG, "Error closing empty output stream");
+                    }
+                    sendResponse();
                     return;
                 }
                 else {
-                    db = manager.getDatabase(dbName);
+                    boolean mustExist = false;
+                    db = manager.getDatabaseWithoutOpening(dbName, mustExist);
                     if(db == null) {
                         connection.setResponseCode(Status.BAD_REQUEST);
                         try {
@@ -432,6 +454,12 @@ public class Router implements Database.ChangeListener {
         // Configure response headers:
         if(status.isSuccessful() && connection.getResponseBody() == null && connection.getHeaderField("Content-Type") == null) {
             connection.setResponseBody(new Body("{\"ok\":true}".getBytes()));
+        }
+
+        if (status.isSuccessful() == false && connection.getResponseBody() == null) {
+            Map<String, Object> result = new HashMap<String, Object>();
+            result.put("status", status.getCode());
+            connection.setResponseBody(new Body(result));
         }
 
         if(connection.getResponseBody() != null && connection.getResponseBody().isValidJSON()) {
@@ -638,12 +666,15 @@ public class Router implements Database.ChangeListener {
         }
         int num_docs = db.getDocumentCount();
         long update_seq = db.getLastSequenceNumber();
+        long instanceStartTimeMicroseconds = db.getStartTime() * 1000;
         Map<String, Object> result = new HashMap<String,Object>();
         result.put("db_name", db.getName());
         result.put("db_uuid", db.publicUUID());
         result.put("doc_count", num_docs);
         result.put("update_seq", update_seq);
         result.put("disk_size", db.totalDataSize());
+        result.put("instance_start_time", instanceStartTimeMicroseconds);
+
         connection.setResponseBody(new Body(result));
         return new Status(Status.OK);
     }
@@ -712,6 +743,9 @@ public class Router implements Database.ChangeListener {
         if (body == null) {
             return new Status(Status.BAD_REQUEST);
         }
+
+        List<Object> keys = (List<Object>) body.get("keys");
+        options.setKeys(keys);
 
         Map<String, Object> result = null;
         result = db.getAllDocs(options);
@@ -931,7 +965,13 @@ public class Router implements Database.ChangeListener {
     }
 
     public Status do_POST_Document_compact(Database _db, String _docID, String _attachmentName) {
-    	Status status = _db.compact();
+        Status status = new Status(Status.OK);
+        try {
+            _db.compact();
+        } catch (CouchbaseLiteException e) {
+            status = e.getCBLStatus();
+        }
+
     	if (status.getCode() < 300) {
     		Status outStatus = new Status();
     		outStatus.setCode(202);	// CouchDB returns 202 'cause it's an async operation
@@ -939,6 +979,57 @@ public class Router implements Database.ChangeListener {
     	} else {
     		return status;
     	}
+    }
+
+    public Status do_POST_Document_purge(Database _db, String ignored1, String ignored2) {
+
+        Map<String,Object> body = getBodyAsDictionary();
+        if(body == null) {
+            return new Status(Status.BAD_REQUEST);
+        }
+
+        // convert from Map<String,Object> -> Map<String, List<String>> - is there a cleaner way?
+        final Map<String, List<String>> docsToRevs = new HashMap<String, List<String>>();
+        for (String key : body.keySet()) {
+            Object val = body.get(key);
+            if (val instanceof List) {
+                docsToRevs.put(key, (List<String>)val);
+            }
+        }
+
+        final List<Map<String, Object>> asyncApiCallResponse = new ArrayList<Map<String, Object>>();
+
+        // this is run in an async db task to fix the following race condition
+        // found in issue #167 (https://github.com/couchbase/couchbase-lite-android/issues/167)
+        // replicator thread: call db.loadRevisionBody for doc1
+        // liteserv thread: call db.purge on doc1
+        // replicator thread: call db.getRevisionHistory for doc1, which returns empty history since it was purged
+        Future future = db.runAsync(new AsyncTask() {
+            @Override
+            public void run(Database database) {
+                Map<String, Object> purgedRevisions = db.purgeRevisions(docsToRevs);
+                asyncApiCallResponse.add(purgedRevisions);
+            }
+        });
+        try {
+            future.get(60, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Log.e(Database.TAG, "Exception waiting for future", e);
+            return new Status(Status.INTERNAL_SERVER_ERROR);
+        } catch (ExecutionException e) {
+            Log.e(Database.TAG, "Exception waiting for future", e);
+            return new Status(Status.INTERNAL_SERVER_ERROR);
+        } catch (TimeoutException e) {
+            Log.e(Database.TAG, "Exception waiting for future", e);
+            return new Status(Status.INTERNAL_SERVER_ERROR);
+        }
+
+        Map<String, Object> purgedRevisions = asyncApiCallResponse.get(0);
+        Map<String, Object> responseMap = new HashMap<String, Object>();
+        responseMap.put("purged", purgedRevisions);
+        Body responseBody = new Body(responseMap);
+        connection.setResponseBody(responseBody);
+        return new Status(Status.OK);
     }
 
     public Status do_POST_Document_ensure_full_commit(Database _db, String _docID, String _attachmentName) {
@@ -1354,6 +1445,22 @@ public class Router implements Database.ChangeListener {
     public Status update(Database _db, String docID, Map<String,Object> bodyDict, boolean deleting) {
         Body body = new Body(bodyDict);
         Status status = new Status();
+
+        if (docID != null && docID.isEmpty() == false) {
+            // On PUT/DELETE, get revision ID from either ?rev= query or doc body:
+            String revParam = getQuery("rev");
+            if (revParam != null && bodyDict != null && bodyDict.size() > 0) {
+                String revProp = (String) bodyDict.get("_rev");
+                if (revProp == null) {
+                    // No _rev property in body, so use ?rev= query param instead:
+                    bodyDict.put("_rev", revParam);
+                    body = new Body(bodyDict);
+                } else if (!revParam.equals(revProp)) {
+                    throw new IllegalArgumentException("Mismatch between _rev and rev");
+                }
+            }
+        }
+
         RevisionInternal rev = update(_db, docID, body, deleting, false, status);
         if(status.isSuccessful()) {
             cacheWithEtag(rev.getRevId());  // set ETag
@@ -1407,7 +1514,8 @@ public class Router implements Database.ChangeListener {
         return update(_db, docID, null, true);
     }
 
-    public void updateAttachment(String attachment, String docID, InputStream contentStream) throws CouchbaseLiteException {
+    public Status updateAttachment(String attachment, String docID, InputStream contentStream) throws CouchbaseLiteException {
+        Status status = new Status(Status.OK);
         String revID = getQuery("rev");
         if(revID == null) {
             revID = getRevIDFromIfMatchHeader();
@@ -1423,14 +1531,15 @@ public class Router implements Database.ChangeListener {
         if(contentStream != null) {
             setResponseLocation(connection.getURL());
         }
+        return status;
     }
 
-    public void do_PUT_Attachment(Database _db, String docID, String _attachmentName) throws CouchbaseLiteException {
-        updateAttachment(_attachmentName, docID, connection.getRequestInputStream());
+    public Status do_PUT_Attachment(Database _db, String docID, String _attachmentName) throws CouchbaseLiteException {
+        return updateAttachment(_attachmentName, docID, connection.getRequestInputStream());
     }
 
-    public void do_DELETE_Attachment(Database _db, String docID, String _attachmentName) throws CouchbaseLiteException {
-        updateAttachment(_attachmentName, docID, null);
+    public Status do_DELETE_Attachment(Database _db, String docID, String _attachmentName) throws CouchbaseLiteException {
+        return updateAttachment(_attachmentName, docID, null);
     }
 
     /** VIEW QUERIES: **/

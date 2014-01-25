@@ -6,8 +6,7 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * Enumerator on a Query's result rows.
- * The objects returned are instances of QueryRow.
+ * An enumerator for Couchbase Lite View Query results.
  */
 public class QueryEnumerator implements Iterator<QueryRow> {
 
@@ -20,7 +19,7 @@ public class QueryEnumerator implements Iterator<QueryRow> {
      * Constructor
      */
     @InterfaceAudience.Private
-    QueryEnumerator(Database database, List<QueryRow> rows, long sequenceNumber) {
+    /* package */ QueryEnumerator(Database database, List<QueryRow> rows, long sequenceNumber) {
         this.database = database;
         this.rows = rows;
         this.sequenceNumber = sequenceNumber;
@@ -35,7 +34,7 @@ public class QueryEnumerator implements Iterator<QueryRow> {
      * Constructor
      */
     @InterfaceAudience.Private
-    QueryEnumerator(QueryEnumerator other) {
+    /* package */ QueryEnumerator(QueryEnumerator other) {
         this.database = other.database;
         this.rows = other.rows;
         this.sequenceNumber = other.sequenceNumber;

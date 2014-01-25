@@ -31,11 +31,10 @@ public class ApiTest extends LiteTestCase {
     static void createDocumentsAsync(final Database db, final int n) {
         db.runAsync(new AsyncTask() {
             @Override
-            public boolean run(Database database) {
+            public void run(Database database) {
                 db.beginTransaction();
                 createDocuments(db, n);
                 db.endTransaction(true);
-                return true;
             }
         });
 
@@ -51,36 +50,17 @@ public class ApiTest extends LiteTestCase {
         }
     };
 
-    static Document createDocumentWithProperties(Database db, Map<String,Object>  properties) {
-        Document  doc = db.createDocument();
-        Assert.assertNotNull(doc);
-        Assert.assertNull(doc.getCurrentRevisionId());
-        Assert.assertNull(doc.getCurrentRevision());
-        Assert.assertNotNull("Document has no ID", doc.getId()); // 'untitled' docs are no longer untitled (8/10/12)
-        try{
-            doc.putProperties(properties);
-        } catch( Exception e){
-            Log.e(TAG, "Error creating document", e);
-            assertTrue("can't create new document in db:" + db.getName() + " with properties:" + properties.toString(), false);
-        }
-        Assert.assertNotNull(doc.getId());
-        Assert.assertNotNull(doc.getCurrentRevisionId());
-        Assert.assertNotNull(doc.getUserProperties());
-        Assert.assertEquals(db.getDocument(doc.getId()), doc);
-        return doc;
-    }
-
-
     //SERVER & DOCUMENTS
 
-    public void testAPIManager() throws IOException {
+    public void testAPIManager() throws Exception {
         Manager manager = this.manager;
         Assert.assertTrue(manager != null);
         for(String dbName : manager.getAllDatabaseNames()){
             Database db = manager.getDatabase(dbName);
             Log.i(TAG, "Database '" + dbName + "':" + db.getDocumentCount() + " documents");
         }
-        ManagerOptions options= new ManagerOptions(true, false);
+        ManagerOptions options= new ManagerOptions();
+        options.setReadOnly(true);
 
         Manager roManager=new Manager(new File(manager.getDirectory()), options);
         Assert.assertTrue(roManager!=null);
@@ -92,7 +72,7 @@ public class ApiTest extends LiteTestCase {
         Assert.assertTrue(dbNames.contains(DEFAULT_TEST_DB));
     }
 
-    public void testCreateDocument() {
+    public void testCreateDocument() throws CouchbaseLiteException {
         Map<String,Object> properties = new HashMap<String,Object>();
         properties.put("testName", "testCreateDocument");
         properties.put("tag", 1337);
@@ -100,9 +80,9 @@ public class ApiTest extends LiteTestCase {
         Database db = startDatabase();
         Document doc=createDocumentWithProperties(db, properties);
         String docID=doc.getId();
-        assertTrue("Invalid doc ID: " +docID , docID.length()>10);
+        assertTrue("Invalid doc ID: " + docID, docID.length() > 10);
         String currentRevisionID=doc.getCurrentRevisionId();
-        assertTrue("Invalid doc revision: " +docID , currentRevisionID.length()>10);
+        assertTrue("Invalid doc revision: " + docID, currentRevisionID.length() > 10);
         assertEquals(doc.getUserProperties(), properties);
         assertEquals(db.getDocument(docID), doc);
 
@@ -115,6 +95,70 @@ public class ApiTest extends LiteTestCase {
         assertNull(db.getExistingDocument("b0gus"));
     }
 
+
+    public void testDeleteDatabase() throws Exception {
+        Database deleteme = manager.getDatabase("deleteme");
+        assertTrue(deleteme.exists());
+        deleteme.delete();
+        assertFalse(deleteme.exists());
+        deleteme.delete();  // delete again, even though already deleted
+        Database deletemeFetched = manager.getExistingDatabase("deleteme");
+        assertNull(deletemeFetched);
+    }
+
+    public void testDatabaseCompaction() throws Exception{
+
+        Map<String,Object> properties = new HashMap<String,Object>();
+        properties.put("testName", "testDatabaseCompaction");
+        properties.put("tag", 1337);
+
+
+        Document doc=createDocumentWithProperties(database, properties);
+        SavedRevision rev1 = doc.getCurrentRevision();
+
+        Map<String,Object> properties2 = new HashMap<String,Object>(properties);
+        properties2.put("tag", 4567);
+
+        SavedRevision rev2 = rev1.createRevision(properties2);
+        database.compact();
+
+        Document fetchedDoc = database.getDocument(doc.getId());
+        List<SavedRevision> revisions = fetchedDoc.getRevisionHistory();
+        for (SavedRevision revision : revisions) {
+            if (revision.getId().equals(rev1)) {
+                assertFalse(revision.arePropertiesAvailable());
+            }
+            if (revision.getId().equals(rev2)) {
+                assertTrue(revision.arePropertiesAvailable());
+            }
+        }
+
+    }
+
+    public void testDocumentCache() throws Exception{
+
+        Database db = startDatabase();
+        Document doc = db.createDocument();
+        UnsavedRevision rev1 = doc.createRevision();
+        Map<String, Object> rev1Properties = new HashMap<String, Object>();
+        rev1Properties.put("foo", "bar");
+        rev1.setUserProperties(rev1Properties);
+        SavedRevision savedRev1 = rev1.save();
+        String documentId = savedRev1.getDocument().getId();
+
+        // getting the document puts it in cache
+        Document docRev1 = db.getExistingDocument(documentId);
+
+        UnsavedRevision rev2 = docRev1.createRevision();
+        Map<String, Object> rev2Properties = rev2.getProperties();
+        rev2Properties.put("foo", "baz");
+        rev2.setUserProperties(rev2Properties);
+        rev2.save();
+
+        Document docRev2 = db.getExistingDocument(documentId);
+        assertEquals("baz", docRev2.getProperty("foo"));
+
+    }
 
     public void testCreateRevisions() throws Exception{
         Map<String,Object> properties = new HashMap<String,Object>();
@@ -291,6 +335,7 @@ public class ApiTest extends LiteTestCase {
     }
 
 
+
     public void testAllDocuments() throws Exception{
         Database db = startDatabase();
         int kNDocs = 5;
@@ -398,6 +443,52 @@ public class ApiTest extends LiteTestCase {
 
     }
 
+    public void testHistoryAfterDocDeletion() throws Exception{
+
+        Map<String,Object> properties = new HashMap<String, Object>();
+        String docId = "testHistoryAfterDocDeletion";
+        properties.put("tag", 1);
+
+        Database db = startDatabase();
+        Document doc = db.getDocument(docId);
+        assertEquals(docId, doc.getId());
+        doc.putProperties(properties);
+
+        String revID = doc.getCurrentRevisionId();
+        for(int i=2; i<6; i++){
+            properties.put("tag", i);
+            properties.put("_rev", revID );
+            doc.putProperties(properties);
+            revID = doc.getCurrentRevisionId();
+            Log.i(TAG, i + " revision: " + revID);
+            assertTrue("revision is not correct:" + revID + ", should be with prefix " + i +"-", revID.startsWith(String.valueOf(i) +"-"));
+            assertEquals("Doc Id is not correct ", docId, doc.getId());
+        }
+
+        // now delete the doc and clear it from the cache so we
+        // make sure we are reading a fresh copy
+        doc.delete();
+        database.clearDocumentCache();
+
+        // get doc from db with same ID as before, and the current rev should be null since the
+        // last update was a deletion
+        Document docPostDelete = db.getDocument(docId);
+        assertNull(docPostDelete.getCurrentRevision());
+
+        // save a new revision
+        properties = new HashMap<String, Object>();
+        properties.put("tag", 6);
+        UnsavedRevision newRevision = docPostDelete.createRevision();
+        newRevision.setProperties(properties);
+        SavedRevision newSavedRevision = newRevision.save();
+
+        // make sure the current revision of doc matches the rev we just saved
+        assertEquals(newSavedRevision, docPostDelete.getCurrentRevision());
+
+        // make sure the rev id is 7-
+        assertTrue(docPostDelete.getCurrentRevisionId().startsWith("7-"));
+
+    }
 
     public void testConflict() throws Exception{
         Map<String,Object> prop = new HashMap<String, Object>();
@@ -417,7 +508,8 @@ public class ApiTest extends LiteTestCase {
         properties.put("tag", 3);
         UnsavedRevision newRev = rev1.createRevision();
         newRev.setProperties(properties);
-        SavedRevision rev2b = newRev.saveAllowingConflict();
+        boolean allowConflict = true;
+        SavedRevision rev2b = newRev.save(allowConflict);
         assertNotNull("Failed to create a a conflict", rev2b);
 
         List<SavedRevision> confRevs = new ArrayList<SavedRevision>();
@@ -511,7 +603,7 @@ public class ApiTest extends LiteTestCase {
         createDocumentsAsync(db, 5);
         // We expect that the changes reported by the server won't be notified, because those revisions
         // are already cached in memory.
-        boolean success = doneSignal.await(1, TimeUnit.SECONDS);
+        boolean success = doneSignal.await(300, TimeUnit.SECONDS);
         assertTrue(success);
         assertEquals(5, db.getLastSequenceNumber());
 
@@ -567,13 +659,11 @@ public class ApiTest extends LiteTestCase {
         Database db = startDatabase();
         db.setValidation("uncool", new Validator() {
             @Override
-            public boolean validate(Revision newRevision, ValidationContext context) {
+            public void validate(Revision newRevision, ValidationContext context) {
                 {
                     if (newRevision.getProperty("groovy") ==null) {
                         context.reject("uncool");
-                        return false;
                     }
-                    return true;
 
                 }
             }
@@ -709,7 +799,7 @@ public class ApiTest extends LiteTestCase {
         }
 
         // wait for the doneSignal to be finished
-        boolean success = doneSignal.await(30, TimeUnit.SECONDS);
+        boolean success = doneSignal.await(300, TimeUnit.SECONDS);
         assertTrue("Done signal timed out, live query never ran", success);
 
         // stop the livequery since we are done with it
@@ -758,7 +848,7 @@ public class ApiTest extends LiteTestCase {
         });
 
         Log.i(TAG, "Waiting for async query to finish...");
-        boolean success = doneSignal.await(30, TimeUnit.SECONDS);
+        boolean success = doneSignal.await(300, TimeUnit.SECONDS);
         assertTrue("Done signal timed out, async query never ran", success);
 
     }
@@ -780,8 +870,7 @@ public class ApiTest extends LiteTestCase {
 
         db.setValidation("val", new Validator() {
             @Override
-            public boolean validate(Revision newRevision, ValidationContext context) {
-                return true;
+            public void validate(Revision newRevision, ValidationContext context) {
             }
         });
 
@@ -808,7 +897,7 @@ public class ApiTest extends LiteTestCase {
 
         Future result = mgr.runAsync("db", new AsyncTask() {
             @Override
-            public boolean run(Database database) {
+            public void run(Database database) {
                 assertNotNull(database);
                 View serverView = database.getExistingView("view");
                 assertNotNull(serverView);
@@ -816,8 +905,6 @@ public class ApiTest extends LiteTestCase {
                 assertEquals(database.getValidation("val"), validation);
                 assertEquals(serverView.getMap(), map);
                 assertEquals(serverView.getReduce(), reduce);
-                return true;
-
             }
         });
         result.get();  // blocks until async task has run

@@ -59,7 +59,7 @@ public class QueryRow {
      * The database property will be filled in when I'm added to a QueryEnumerator.
      */
     @InterfaceAudience.Private
-    QueryRow(String documentId, long sequence, Object key, Object value, Map<String, Object> documentProperties) {
+    /* package */ QueryRow(String documentId, long sequence, Object key, Object value, Map<String, Object> documentProperties) {
         this.sourceDocumentId = documentId;
         this.sequence = sequence;
         this.key = key;
@@ -240,12 +240,20 @@ public class QueryRow {
         return false;
     }
 
+    @Override
+    @InterfaceAudience.Public
+    public String toString() {
+        return asJSONDictionary().toString();
+    }
 
     @InterfaceAudience.Private
-    void setDatabase(Database database) {
+    /* package */ void setDatabase(Database database) {
         this.database = database;
     }
 
+    /**
+     * @exclude
+     */
     @InterfaceAudience.Private
     public Map<String, Object> asJSONDictionary() {
         Map<String, Object> result = new HashMap<String, Object>();
@@ -265,8 +273,5 @@ public class QueryRow {
         return result;
     }
 
-    @Override
-    public String toString() {
-        return asJSONDictionary().toString();
-    }
+
 }

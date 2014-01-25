@@ -8,13 +8,16 @@ import java.util.List;
 import java.util.Map;
 
 /**
+ *
+ * A Couchbase Lite Document Revision.
+ *
  * Stores information about a revision -- its docID, revID, and whether it's deleted.
  *
  * It can also store the sequence number and document contents (they can be added after creation).
  */
 public abstract class Revision {
 
-    /**
+    /**re
      * The sequence number of this revision.
      */
     protected long sequence;
@@ -36,6 +39,7 @@ public abstract class Revision {
 
     /**
      * Constructor
+     * @exclude
      */
     @InterfaceAudience.Private
     Revision() {
@@ -44,6 +48,7 @@ public abstract class Revision {
 
     /**
      * Constructor
+     * @exclude
      */
     @InterfaceAudience.Private
     protected Revision(Document document) {
@@ -69,7 +74,6 @@ public abstract class Revision {
     /**
      * Gets the Revision's id.
      */
-
     @InterfaceAudience.Public
     public abstract String getId();
 
@@ -79,7 +83,7 @@ public abstract class Revision {
      * (In other words, does it have a "_deleted" property?)
      */
     @InterfaceAudience.Public
-    boolean isDeletion() {
+    public boolean isDeletion() {
         Object deleted = getProperty("_deleted");
         if (deleted == null) {
             return false;
@@ -181,11 +185,8 @@ public abstract class Revision {
     @InterfaceAudience.Public
     public abstract List<SavedRevision> getRevisionHistory() throws CouchbaseLiteException;
 
-    Map<String, Object> getAttachmentMetadata() {
-        return (Map<String, Object>) getProperty("_attachments");
-    }
-
     @Override
+    @InterfaceAudience.Public
     public boolean equals(Object o) {
         boolean result = false;
         if(o instanceof SavedRevision) {
@@ -198,32 +199,56 @@ public abstract class Revision {
     }
 
     @Override
+    @InterfaceAudience.Public
     public int hashCode() {
         return document.getId().hashCode() ^ getId().hashCode();
     }
 
-    void setSequence(long sequence) {
-        this.sequence = sequence;
-    }
-
-    long getSequence() {
-        return sequence;
-    }
-
     @Override
+    @InterfaceAudience.Public
     public String toString() {
         return "{" + this.document.getId() + " #" + this.getId() + (isDeletion() ? "DEL" : "") + "}";
     }
 
     /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    /* package */ Map<String, Object> getAttachmentMetadata() {
+        return (Map<String, Object>) getProperty("_attachments");
+    }
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    /* package */ void setSequence(long sequence) {
+        this.sequence = sequence;
+    }
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    /* package */ long getSequence() {
+        return sequence;
+    }
+
+    /**
      * Generation number: 1 for a new document, 2 for the 2nd revision, ...
      * Extracted from the numeric prefix of the revID.
+     * @exclude
      */
-    int getGeneration() {
+    @InterfaceAudience.Private
+    /* package */ int getGeneration() {
         return generationFromRevID(getId());
     }
 
-    static int generationFromRevID(String revID) {
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    /* package */ static int generationFromRevID(String revID) {
         int generation = 0;
         int dashPos = revID.indexOf("-");
         if(dashPos > 0) {

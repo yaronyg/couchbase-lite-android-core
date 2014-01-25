@@ -39,18 +39,20 @@ public class SavedRevision extends Revision {
 
     /**
      * Constructor
+     * @exclude
      */
     @InterfaceAudience.Private
-    SavedRevision(Document document, RevisionInternal revision) {
+    /* package */ SavedRevision(Document document, RevisionInternal revision) {
         super(document);
         this.revisionInternal = revision;
     }
 
     /**
      * Constructor
+     * @exclude
      */
     @InterfaceAudience.Private
-    SavedRevision(Database database, RevisionInternal revision) {
+    /* package */ SavedRevision(Database database, RevisionInternal revision) {
         this(database.getDocument(revision.getDocId()), revision);
     }
 
@@ -96,7 +98,7 @@ public class SavedRevision extends Revision {
      * @return
      */
     @InterfaceAudience.Public
-    public UnsavedRevision createRevision() {
+    public UnsavedRevision createRevision() throws CouchbaseLiteException {
         UnsavedRevision newRevision = new UnsavedRevision(document, this);
         return newRevision;
     }
@@ -119,7 +121,7 @@ public class SavedRevision extends Revision {
 
     @Override
     @InterfaceAudience.Public
-    boolean isDeletion() {
+    public boolean isDeletion() {
         return revisionInternal.isDeleted();
     }
 
@@ -179,7 +181,11 @@ public class SavedRevision extends Revision {
         return sequence;
     }
 
-    boolean loadProperties() {
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    /* package */ boolean loadProperties() {
         try {
             RevisionInternal loadRevision = getDatabase().loadRevisionBody(revisionInternal, EnumSet.noneOf(Database.TDContentOptions.class));
             if (loadRevision == null) {

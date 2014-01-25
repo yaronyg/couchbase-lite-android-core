@@ -11,12 +11,24 @@ import java.util.concurrent.Future;
  */
 public class Query {
 
+    /**
+     * Determines whether or when the view index is updated. By default, the index will be updated
+     * if necessary before the query runs -- this guarantees up-to-date results but can cause a delay.
+     */
     public enum IndexUpdateMode {
-        NEVER, BEFORE, AFTER
+        BEFORE,  // Always update index if needed before querying (default)
+        NEVER,   // Don't update the index; results may be out of date
+        AFTER    // Update index _after_ querying (results may still be out of date)
     }
 
+    /**
+     * Changes the behavior of a query created by queryAllDocuments.
+     */
     public enum AllDocsMode {
-        ALL_DOCS, INCLUDE_DELETED, SHOW_CONFLICTS, ONLY_CONFLICTS
+        ALL_DOCS,          // (the default), the query simply returns all non-deleted documents.
+        INCLUDE_DELETED,   // in this mode it also returns deleted documents.
+        SHOW_CONFLICTS,    // the .conflictingRevisions property of each row will return the conflicting revisions, if any, of that document.
+        ONLY_CONFLICTS     // _only_ documents in conflict will be returned. (This mode is especially useful for use with a CBLLiveQuery, so you can be notified of conflicts as they happen, i.e. when they're pulled in by a replication.)
     }
 
     /**
@@ -133,7 +145,7 @@ public class Query {
      * Constructor
      */
     @InterfaceAudience.Private
-    Query(Database database, View view) {
+    /* package */ Query(Database database, View view) {
         this.database = database;
         this.view = view;
         limit = Integer.MAX_VALUE;
@@ -146,7 +158,7 @@ public class Query {
      * Constructor
      */
     @InterfaceAudience.Private
-    Query(Database database, Mapper mapFunction) {
+    /* package */ Query(Database database, Mapper mapFunction) {
         this(database, database.makeAnonymousView());
         temporaryView = true;
         view.setMap(mapFunction, "");
@@ -156,7 +168,7 @@ public class Query {
      * Constructor
      */
     @InterfaceAudience.Private
-    Query(Database database, Query query) {
+    /* package */ Query(Database database, Query query) {
         this(database, query.getView());
         limit = query.limit;
         skip = query.skip;
@@ -357,6 +369,17 @@ public class Query {
         return runAsyncInternal(onComplete);
     }
 
+    /**
+     * A delegate that can be called to signal the completion of a Query.
+     */
+    @InterfaceAudience.Public
+    public static interface QueryCompleteListener {
+        public void completed(QueryEnumerator rows, Throwable error);
+    }
+
+    /**
+     * @exclude
+     */
     @InterfaceAudience.Private
     Future runAsyncInternal(final QueryCompleteListener onComplete) {
 
@@ -380,10 +403,15 @@ public class Query {
 
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public View getView() {
         return view;
     }
 
+    @InterfaceAudience.Private
     private QueryOptions getQueryOptions() {
         QueryOptions queryOptions = new QueryOptions();
         queryOptions.setStartKey(getStartKey());
@@ -405,6 +433,7 @@ public class Query {
     }
 
     @Override
+    @InterfaceAudience.Private
     protected void finalize() throws Throwable {
         super.finalize();
         if (temporaryView) {
@@ -412,9 +441,6 @@ public class Query {
         }
     }
 
-    public static interface QueryCompleteListener {
-        public void completed(QueryEnumerator rows, Throwable error);
-    }
 
 
 

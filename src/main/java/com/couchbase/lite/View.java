@@ -38,8 +38,14 @@ import java.util.Map;
  */
 public class View {
 
+    /**
+     * @exclude
+     */
     public static final int REDUCE_BATCH_SIZE = 100;
 
+    /**
+     * @exclude
+     */
     public enum TDViewCollation {
         TDViewCollationUnicode, TDViewCollationRaw, TDViewCollationASCII
     }
@@ -73,7 +79,7 @@ public class View {
      * Constructor
      */
     @InterfaceAudience.Private
-    View(Database database, String name) {
+    /* package */ View(Database database, String name) {
         this.database = database;
         this.name = name;
         this.viewId = -1; // means 'unknown'
@@ -282,6 +288,10 @@ public class View {
         return new Query(getDatabase(), this);
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public int getViewId() {
         if (viewId < 0) {
             String sql = "SELECT view_id FROM views WHERE name=?";
@@ -306,10 +316,10 @@ public class View {
         return viewId;
     }
 
-
-
-
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void databaseClosing() {
         database = null;
         viewId = 0;
@@ -317,6 +327,10 @@ public class View {
 
     /*** Indexing ***/
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String toJSONString(Object object) {
         if (object == null) {
             return null;
@@ -330,6 +344,10 @@ public class View {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public Object fromJSON(byte[] json) {
         if (json == null) {
             return null;
@@ -343,10 +361,18 @@ public class View {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public TDViewCollation getCollation() {
         return collation;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void setCollation(TDViewCollation collation) {
         this.collation = collation;
     }
@@ -354,8 +380,10 @@ public class View {
     /**
      * Updates the view's index (incrementally) if necessary.
      * @return 200 if updated, 304 if already up-to-date, else an error code
+     * @exclude
      */
     @SuppressWarnings("unchecked")
+    @InterfaceAudience.Private
     public void updateIndex() throws CouchbaseLiteException {
         Log.v(Database.TAG, "Re-indexing view " + name + " ...");
         assert (mapBlock != null);
@@ -378,6 +406,7 @@ public class View {
                 String msg = String.format("lastSequence (%d) == dbMaxSequence (%d), nothing to do",
                         lastSequence, dbMaxSequence);
                 Log.d(Database.TAG, msg);
+                result.setCode(Status.OK);
                 return;
             }
 
@@ -529,6 +558,10 @@ public class View {
 
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public Cursor resultSetWithOptions(QueryOptions options) {
         if (options == null) {
             options = new QueryOptions();
@@ -614,7 +647,11 @@ public class View {
         return cursor;
     }
 
-    // Are key1 and key2 grouped together at this groupLevel?
+    /**
+     * Are key1 and key2 grouped together at this groupLevel?
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static boolean groupTogether(Object key1, Object key2, int groupLevel) {
         if(groupLevel == 0 || !(key1 instanceof List) || !(key2 instanceof List)) {
             return key1.equals(key2);
@@ -632,8 +669,12 @@ public class View {
         return true;
     }
 
-    // Returns the prefix of the key to use in the result row, at this groupLevel
+    /**
+     * Returns the prefix of the key to use in the result row, at this groupLevel
+     * @exclude
+     */
     @SuppressWarnings("unchecked")
+    @InterfaceAudience.Private
     public static Object groupKey(Object key, int groupLevel) {
         if(groupLevel > 0 && (key instanceof List) && (((List<Object>)key).size() > groupLevel)) {
             return ((List<Object>)key).subList(0, groupLevel);
@@ -644,6 +685,11 @@ public class View {
     }
 
     /*** Querying ***/
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public List<Map<String, Object>> dump() {
         if (getViewId() < 0) {
             return null;
@@ -682,6 +728,10 @@ public class View {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     List<QueryRow> reducedQuery(Cursor cursor, boolean group, int groupLevel) throws CouchbaseLiteException {
 
         List<Object> keysToReduce = null;
@@ -738,6 +788,7 @@ public class View {
      *
      * @param options The options to use.
      * @return An array of QueryRow objects.
+     * @exclude
      */
     @InterfaceAudience.Private
     public List<QueryRow> queryWithOptions(QueryOptions options) throws CouchbaseLiteException {
@@ -819,7 +870,9 @@ public class View {
 
     /**
      * Utility function to use in reduce blocks. Totals an array of Numbers.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public static double totalValues(List<Object>values) {
         double total = 0;
         for (Object object : values) {
@@ -835,6 +888,7 @@ public class View {
 
 }
 
+@InterfaceAudience.Private
 abstract class AbstractTouchMapEmitBlock implements Emitter {
 
     protected long sequence = 0;

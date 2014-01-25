@@ -36,7 +36,14 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -55,7 +62,14 @@ public class Database {
     private boolean open = false;
     private int transactionLevel = 0;
 
+    /**
+     * @exclude
+     */
     public static final String TAG = "Database";
+
+    /**
+     * @exclude
+     */
     public static final String TAG_SQL = "CBLSQL";
 
     private Map<String, View> views;
@@ -66,14 +80,20 @@ public class Database {
     private List<Replication> activeReplicators;
     private BlobStore attachments;
     private Manager manager;
-    private List<ChangeListener> changeListeners;
+    final private List<ChangeListener> changeListeners;
     private LruCache<String, Document> docCache;
 
-    // Length that constitutes a 'big' attachment
+    private long startTime;
+
+    /**
+     * Length that constitutes a 'big' attachment
+     * @exclude
+     */
     public static int kBigAttachmentLength = (16*1024);
 
     /**
      * Options for what metadata to include in document bodies
+     * @exclude
      */
     public enum TDContentOptions {
         TDIncludeAttachments, TDIncludeConflicts, TDIncludeRevs, TDIncludeRevsInfo, TDIncludeLocalSeq, TDNoBody, TDBigAttachmentsFollow
@@ -93,6 +113,9 @@ public class Database {
         KNOWN_SPECIAL_KEYS.add("_deleted_conflicts");
     }
 
+    /**
+     * @exclude
+     */
     public static final String SCHEMA = "" +
             "CREATE TABLE docs ( " +
             "        doc_id INTEGER PRIMARY KEY, " +
@@ -160,6 +183,7 @@ public class Database {
 
     /**
      * Constructor
+     * @exclude
      */
     @InterfaceAudience.Private
     public Database(String path, Manager manager) {
@@ -167,8 +191,9 @@ public class Database {
         this.path = path;
         this.name = FileDirUtils.getDatabaseNameFromPath(path);
         this.manager = manager;
-        this.changeListeners = new ArrayList<ChangeListener>();
+        this.changeListeners = Collections.synchronizedList(new ArrayList<ChangeListener>());
         this.docCache = new LruCache<String, Document>(MAX_DOC_CACHE_SIZE);
+        this.startTime = System.currentTimeMillis();
     }
 
     /**
@@ -249,7 +274,7 @@ public class Database {
      * and running a SQLite "VACUUM" command.
      */
     @InterfaceAudience.Public
-    public Status compact() {
+    public void compact() throws CouchbaseLiteException {
         // Can't delete any rows because that would lose revision tree history.
         // But we can remove the JSON of non-current revisions, which is most of the space.
         try {
@@ -259,44 +284,59 @@ public class Database {
             database.update("revs", args, "current=0", null);
         } catch (SQLException e) {
             Log.e(Database.TAG, "Error compacting", e);
-            return new Status(Status.INTERNAL_SERVER_ERROR);
+            throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
         }
 
         Log.v(Database.TAG, "Deleting old attachments...");
         Status result = garbageCollectAttachments();
+        if (!result.isSuccessful()) {
+            throw new CouchbaseLiteException(result);
+        }
 
         Log.v(Database.TAG, "Vacuuming SQLite sqliteDb...");
         try {
             database.execSQL("VACUUM");
         } catch (SQLException e) {
             Log.e(Database.TAG, "Error vacuuming sqliteDb", e);
-            return new Status(Status.INTERNAL_SERVER_ERROR);
+            throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
         }
 
-        return result;
+
     }
 
 
     /**
      * Deletes the database.
+     *
+     * @throws java.lang.RuntimeException
      */
     @InterfaceAudience.Public
-    public boolean delete() {
+    public void delete() throws CouchbaseLiteException {
         if(open) {
             if(!close()) {
-                return false;
+                throw new CouchbaseLiteException("The database was open, and could not be closed", Status.INTERNAL_SERVER_ERROR);
             }
         }
-        else if(!exists()) {
-            return true;
+        manager.forgetDatabase(this);
+        if(!exists()) {
+            return;
         }
         File file = new File(path);
         File attachmentsFile = new File(getAttachmentStorePath());
 
         boolean deleteStatus = file.delete();
+
         //recursively delete attachments path
         boolean deleteAttachmentStatus = FileDirUtils.deleteRecursive(attachmentsFile);
-        return deleteStatus && deleteAttachmentStatus;
+
+        if (!deleteStatus) {
+            throw new CouchbaseLiteException("Was not able to delete the database file", Status.INTERNAL_SERVER_ERROR);
+        }
+
+        if (!deleteAttachmentStatus) {
+            throw new CouchbaseLiteException("Was not able to delete the attachments files", Status.INTERNAL_SERVER_ERROR);
+        }
+
     }
 
 
@@ -570,7 +610,8 @@ public class Database {
     /**
      * Runs the delegate asynchronously.
      */
-    Future runAsync(final AsyncTask function) {
+    @InterfaceAudience.Public
+    public Future runAsync(final AsyncTask function) {
         return getManager().runAsync(new Runnable() {
             @Override
             public void run() {
@@ -587,7 +628,7 @@ public class Database {
      * @return
      */
     @InterfaceAudience.Public
-    public Replication getPushReplication(URL remote) {
+    public Replication createPushReplication(URL remote) {
         final boolean continuous = false;
         return new Pusher(this, remote, continuous, manager.getWorkExecutor());
     }
@@ -600,33 +641,11 @@ public class Database {
      * @return
      */
     @InterfaceAudience.Public
-    public Replication getPullReplication(URL remote) {
+    public Replication createPullReplication(URL remote) {
         final boolean continuous = false;
         return new Puller(this, remote, continuous, manager.getWorkExecutor());
     }
 
-
-    /**
-     * Creates a pair of replications to both pull and push to database at the given URL, or
-     * returns existing replications if there are any.
-     *
-     * @param remote
-     * @return An array whose first element is the "pull" replication and second is the "push".
-     */
-    @InterfaceAudience.Public
-    public List<Replication> getReplications(URL remote) {
-        Replication pull;
-        Replication push;
-        if (remote != null) {
-            pull = getPullReplication(remote);
-            push = getPushReplication(remote);
-            ArrayList<Replication> result = new ArrayList<Replication>();
-            result.add(pull);
-            result.add(push);
-            return result;
-        }
-        return null;
-    }
 
     /**
      * Adds a Database change delegate that will be called whenever a Document within the Database changes.
@@ -646,40 +665,90 @@ public class Database {
         changeListeners.remove(listener);
     }
 
-    public URL getInternalURL() {
-        // TODO: implement this
-        throw new RuntimeException("Not implemented");
+    @InterfaceAudience.Public
+    public String toString() {
+        return this.getClass().getName() + "[" + path + "]";
     }
 
     /**
-     * Returns the already-instantiated cached Document with the given ID, or nil if none is yet cached.
+     * The type of event raised when a Database changes.
      */
-    public Document getCachedDocument(String documentID) {
+    @InterfaceAudience.Public
+    public static class ChangeEvent {
+
+        private Database source;
+        private boolean isExternal;
+        private List<DocumentChange> changes;
+
+        public ChangeEvent(Database source, boolean isExternal, List<DocumentChange> changes) {
+            this.source = source;
+            this.isExternal = isExternal;
+            this.changes = changes;
+        }
+
+        public Database getSource() {
+            return source;
+        }
+
+        public boolean isExternal() {
+            return isExternal;
+        }
+
+        public List<DocumentChange> getChanges() {
+            return changes;
+        }
+
+    }
+
+    /**
+     * A delegate that can be used to listen for Database changes.
+     */
+    @InterfaceAudience.Public
+    public static interface ChangeListener {
+        public void changed(ChangeEvent event);
+    }
+
+    /** PRIVATE METHODS **/
+
+    /**
+     * Returns the already-instantiated cached Document with the given ID, or nil if none is yet cached.
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    protected Document getCachedDocument(String documentID) {
         return docCache.get(documentID);
     }
 
     /**
      * Empties the cache of recently used Document objects.
      * API calls will now instantiate and return new instances.
+     * @exclude
      */
-    public void clearDocumentCache() {
+    @InterfaceAudience.Private
+    protected void clearDocumentCache() {
         docCache.evictAll();
     }
 
-    void removeDocumentFromCache(Document document) {
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    protected void removeDocumentFromCache(Document document) {
         docCache.remove(document.getId());
     }
 
-    public String toString() {
-        return this.getClass().getName() + "[" + path + "]";
-    }
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public boolean exists() {
         return new File(path).exists();
     }
 
-
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String getAttachmentStorePath() {
         String attachmentStorePath = path;
         int lastDotPosition = attachmentStorePath.lastIndexOf('.');
@@ -690,6 +759,10 @@ public class Database {
         return attachmentStorePath;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static Database createEmptyDBAtPath(String path, Manager manager) {
         if(!FileDirUtils.removeItemIfExists(path)) {
             return null;
@@ -706,6 +779,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public boolean initialize(String statements) {
         try {
             for (String statement : statements.split(";")) {
@@ -718,6 +795,10 @@ public class Database {
         return true;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public boolean open() {
         if(open) {
             return true;
@@ -808,6 +889,10 @@ public class Database {
         return true;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public boolean close() {
         if(!open) {
             return false;
@@ -835,7 +920,10 @@ public class Database {
         return true;
     }
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String getPath() {
         return path;
     }
@@ -844,30 +932,46 @@ public class Database {
     // Leave this package protected, so it can only be used
     // View uses this accessor
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     SQLiteStorageEngine getDatabase() {
         return database;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public BlobStore getAttachments() {
         return attachments;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public BlobStoreWriter getAttachmentWriter() {
         return new BlobStoreWriter(getAttachments());
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public long totalDataSize() {
         File f = new File(path);
         long size = f.length() + attachments.totalDataSize();
         return size;
     }
 
-
-
     /**
      * Begins a database transaction. Transactions can nest.
      * Every beginTransaction() must be balanced by a later endTransaction()
+     * @exclude
      */
+    @InterfaceAudience.Private
     public boolean beginTransaction() {
         try {
             database.beginTransaction();
@@ -884,7 +988,9 @@ public class Database {
      * Commits or aborts (rolls back) a transaction.
      *
      * @param commit If true, commits; if false, aborts and rolls back, undoing all changes made since the matching -beginTransaction call, *including* any committed nested transactions.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public boolean endTransaction(boolean commit) {
 
         assert(transactionLevel > 0);
@@ -908,8 +1014,10 @@ public class Database {
         return true;
     }
 
-
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String privateUUID() {
         String result = null;
         Cursor cursor = null;
@@ -928,6 +1036,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String publicUUID() {
         String result = null;
         Cursor cursor = null;
@@ -949,7 +1061,11 @@ public class Database {
     /** GETTING DOCUMENTS: **/
 
 
-    /** Splices the contents of an NSDictionary into JSON data (that already represents a dict), without parsing the JSON. */
+    /**
+     * Splices the contents of an NSDictionary into JSON data (that already represents a dict), without parsing the JSON.
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public  byte[] appendDictToJSON(byte[] json, Map<String,Object> dict) {
         if(dict.size() == 0) {
             return json;
@@ -975,8 +1091,12 @@ public class Database {
         return newJson;
     }
 
-    /** Inserts the _id, _rev and _attachments properties into the JSON data and stores it in rev.
-    Rev must already have its revID and sequence properties set. */
+    /**
+     * Inserts the _id, _rev and _attachments properties into the JSON data and stores it in rev.
+     * Rev must already have its revID and sequence properties set.
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public Map<String,Object> extraPropertiesForRevision(RevisionInternal rev, EnumSet<TDContentOptions> contentOptions) {
 
         String docId = rev.getDocId();
@@ -1010,7 +1130,9 @@ public class Database {
                 if(historicalRev.isDeleted()) {
                     status = "deleted";
                 }
-                // TODO: Detect missing revisions, set status="missing"
+                if (historicalRev.isMissing()) {
+                    status = "missing";
+                }
                 revHistoryItem.put("rev", historicalRev.getRevId());
                 revHistoryItem.put("status", status);
                 revsInfo.add(revHistoryItem);
@@ -1055,8 +1177,12 @@ public class Database {
         return result;
     }
 
-    /** Inserts the _id, _rev and _attachments properties into the JSON data and stores it in rev.
-    Rev must already have its revID and sequence properties set. */
+    /**
+     * Inserts the _id, _rev and _attachments properties into the JSON data and stores it in rev.
+     * Rev must already have its revID and sequence properties set.
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void expandStoredJSONIntoRevisionWithAttachments(byte[] json, RevisionInternal rev, EnumSet<TDContentOptions> contentOptions) {
         Map<String,Object> extra = extraPropertiesForRevision(rev, contentOptions);
         if(json != null) {
@@ -1067,7 +1193,11 @@ public class Database {
         }
     }
 
+    /**
+     * @exclude
+     */
     @SuppressWarnings("unchecked")
+    @InterfaceAudience.Private
     public Map<String, Object> documentPropertiesFromJSON(byte[] json, String docId, String revId, boolean deleted, long sequence, EnumSet<TDContentOptions> contentOptions) {
 
         RevisionInternal rev = new RevisionInternal(docId, revId, deleted, this);
@@ -1089,6 +1219,10 @@ public class Database {
         return docProperties;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public RevisionInternal getDocumentWithIDAndRev(String id, String rev, EnumSet<TDContentOptions> contentOptions) {
         RevisionInternal result = null;
         String sql;
@@ -1136,10 +1270,18 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public boolean existsDocumentWithIDAndRev(String docId, String revId) {
         return getDocumentWithIDAndRev(docId, revId, EnumSet.of(TDContentOptions.TDNoBody)) != null;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public RevisionInternal loadRevisionBody(RevisionInternal rev, EnumSet<TDContentOptions> contentOptions) throws CouchbaseLiteException {
         if(rev.getBody() != null && contentOptions == EnumSet.noneOf(Database.TDContentOptions.class) && rev.getSequence() != 0) {
             return rev;
@@ -1167,9 +1309,18 @@ public class Database {
                 cursor.close();
             }
         }
+
+        if (result.getCode() == Status.NOT_FOUND) {
+            throw new CouchbaseLiteException(result);
+        }
+
         return rev;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public long getDocNumericID(String docId) {
         Cursor cursor = null;
         String[] args = { docId };
@@ -1199,7 +1350,9 @@ public class Database {
 
     /**
      * Returns all the known revisions (or all current/conflicting revisions) of a document.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public RevisionList getAllRevisionsOfDocumentID(String docId, long docNumericID, boolean onlyCurrent) {
 
         String sql = null;
@@ -1239,6 +1392,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public RevisionList getAllRevisionsOfDocumentID(String docId, boolean onlyCurrent) {
         long docNumericId = getDocNumericID(docId);
         if(docNumericId < 0) {
@@ -1252,6 +1409,10 @@ public class Database {
         }
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public List<String> getConflictingRevisionIDsOfDocID(String docID) {
         long docIdNumeric = getDocNumericID(docID);
         if(docIdNumeric < 0) {
@@ -1282,6 +1443,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String findCommonAncestorOf(RevisionInternal rev, List<String> revIDs) {
         String result = null;
 
@@ -1318,7 +1483,9 @@ public class Database {
 
     /**
      * Returns an array of TDRevs in reverse chronological order, starting with the given revision.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public List<RevisionInternal> getRevisionHistory(RevisionInternal rev) {
         String docId = rev.getDocId();
         String revId = rev.getRevId();
@@ -1332,7 +1499,7 @@ public class Database {
             return new ArrayList<RevisionInternal>();
         }
 
-        String sql = "SELECT sequence, parent, revid, deleted FROM revs " +
+        String sql = "SELECT sequence, parent, revid, deleted, json isnull FROM revs " +
                     "WHERE doc_id=? ORDER BY sequence DESC";
         String[] args = { Long.toString(docNumericId) };
         Cursor cursor = null;
@@ -1356,7 +1523,9 @@ public class Database {
                 if(matches) {
                     revId = cursor.getString(2);
                     boolean deleted = (cursor.getInt(3) > 0);
+                    boolean missing = (cursor.getInt(4) > 0);
                     RevisionInternal aRev = new RevisionInternal(docId, revId, deleted, this);
+                    aRev.setMissing(missing);
                     aRev.setSequence(cursor.getLong(0));
                     result.add(aRev);
                     lastSequence = cursor.getLong(1);
@@ -1378,7 +1547,11 @@ public class Database {
         return result;
     }
 
-    // Splits a revision ID into its generation number and opaque suffix string
+    /**
+     * Splits a revision ID into its generation number and opaque suffix string
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static int parseRevIDNumber(String rev) {
         int result = -1;
         int dashPos = rev.indexOf("-");
@@ -1392,7 +1565,11 @@ public class Database {
         return result;
     }
 
-    // Splits a revision ID into its generation number and opaque suffix string
+    /**
+     * Splits a revision ID into its generation number and opaque suffix string
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static String parseRevIDSuffix(String rev) {
         String result = null;
         int dashPos = rev.indexOf("-");
@@ -1402,6 +1579,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static Map<String,Object> makeRevisionHistoryDict(List<RevisionInternal> history) {
         if(history == null) {
             return null;
@@ -1449,11 +1630,17 @@ public class Database {
 
     /**
      * Returns the revision history as a _revisions dictionary, as returned by the REST API's ?revs=true option.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public Map<String,Object> getRevisionHistoryDict(RevisionInternal rev) {
         return makeRevisionHistoryDict(getRevisionHistory(rev));
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public RevisionList changesSince(long lastSeq, ChangesOptions options, ReplicationFilter filter) {
         // http://wiki.apache.org/couchdb/HTTP_database_API#Changes
         if(options == null) {
@@ -1516,6 +1703,9 @@ public class Database {
         return changes;
     }
 
+    /**
+     * @exclude
+     */
     @InterfaceAudience.Private
     public boolean runFilter(ReplicationFilter filter, Map<String, Object> paramsIgnored, RevisionInternal rev) {
         if (filter == null) {
@@ -1525,6 +1715,10 @@ public class Database {
         return filter.filter(publicRev, null);
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String getDesignDocFunction(String fnName, String key, List<String>outLanguageList) {
         String[] path = fnName.split("/");
         if (path.length != 2) {
@@ -1549,6 +1743,10 @@ public class Database {
 
     /** VIEWS: **/
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public View registerView(View view) {
         if(view == null) {
             return null;
@@ -1560,7 +1758,10 @@ public class Database {
         return view;
     }
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public List<QueryRow> queryViewNamed(String viewName, QueryOptions options, List<Long> outLastSequence) throws CouchbaseLiteException {
 
         long before = System.currentTimeMillis();
@@ -1573,7 +1774,7 @@ public class Database {
                 throw new CouchbaseLiteException(new Status(Status.NOT_FOUND));
             }
             lastSequence = view.getLastSequenceIndexed();
-            if (options.getStale() == Query.IndexUpdateMode.NEVER || lastSequence <= 0) {
+            if (options.getStale() == Query.IndexUpdateMode.BEFORE || lastSequence <= 0) {
                 view.updateIndex();
                 lastSequence = view.getLastSequenceIndexed();
             } else if (options.getStale() == Query.IndexUpdateMode.AFTER && lastSequence < getLastSequenceNumber()) {
@@ -1611,6 +1812,10 @@ public class Database {
 
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     View makeAnonymousView() {
         for (int i=0; true; ++i) {
             String name = String.format("anon%d", i);
@@ -1622,8 +1827,10 @@ public class Database {
         }
     }
 
-
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public List<View> getAllViews() {
         Cursor cursor = null;
         List<View> result = null;
@@ -1647,6 +1854,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public Status deleteViewNamed(String name) {
         Status result = new Status(Status.INTERNAL_SERVER_ERROR);
         try {
@@ -1667,7 +1878,9 @@ public class Database {
 
     /**
      * Hack because cursor interface does not support cursor.getColumnIndex("deleted") yet.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public int getDeletedColumnIndex(QueryOptions options) {
         if (options.isIncludeDocs()) {
             return 5;
@@ -1678,6 +1891,10 @@ public class Database {
 
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public Map<String,Object> getAllDocs(QueryOptions options) throws CouchbaseLiteException {
 
         Map<String, Object> result = new HashMap<String, Object>();
@@ -1852,7 +2069,9 @@ public class Database {
 
     /**
      * Returns the rev ID of the 'winning' revision of this document, and whether it's deleted.
+     * @exclude
      */
+    @InterfaceAudience.Private
     String winningRevIDOfDoc(long docNumericId, List<Boolean> outIsDeleted, List<Boolean> outIsConflict) throws CouchbaseLiteException {
 
         Cursor cursor = null;
@@ -1901,10 +2120,23 @@ public class Database {
     /*** Database+Attachments                                                                    ***/
     /*************************************************************************************************/
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     void insertAttachmentForSequence(AttachmentInternal attachment, long sequence) throws CouchbaseLiteException {
-        insertAttachmentForSequenceWithNameAndType(sequence, attachment.getName(), attachment.getContentType(), attachment.getRevpos(), attachment.getBlobKey());
+        insertAttachmentForSequenceWithNameAndType(
+                sequence,
+                attachment.getName(),
+                attachment.getContentType(),
+                attachment.getRevpos(),
+                attachment.getBlobKey());
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void insertAttachmentForSequenceWithNameAndType(InputStream contentStream, long sequence, String name, String contentType, int revpos) throws CouchbaseLiteException {
         assert(sequence > 0);
         assert(name != null);
@@ -1913,9 +2145,18 @@ public class Database {
         if(!attachments.storeBlobStream(contentStream, key)) {
             throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
         }
-        insertAttachmentForSequenceWithNameAndType(sequence, name, contentType, revpos, key);
+        insertAttachmentForSequenceWithNameAndType(
+                sequence,
+                name,
+                contentType,
+                revpos,
+                key);
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void insertAttachmentForSequenceWithNameAndType(long sequence, String name, String contentType, int revpos, BlobKey key) throws CouchbaseLiteException {
         try {
             ContentValues args = new ContentValues();
@@ -1927,14 +2168,23 @@ public class Database {
             }
             args.put("type", contentType);
             args.put("revpos", revpos);
-            database.insert("attachments", null, args);  // TODO: this needs to look at the result code
+            long result = database.insert("attachments", null, args);
+            if (result == -1) {
+                String msg = "Insert attachment failed (returned -1)";
+                Log.e(Database.TAG, msg);
+                throw new CouchbaseLiteException(msg, Status.INTERNAL_SERVER_ERROR);
+            }
 
         } catch (SQLException e) {
             Log.e(Database.TAG, "Error inserting attachment", e);
-            throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
+            throw new CouchbaseLiteException(e, Status.INTERNAL_SERVER_ERROR);
         }
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     void installAttachment(AttachmentInternal attachment, Map<String, Object> attachInfo) throws CouchbaseLiteException {
         String digest = (String) attachInfo.get("digest");
         if (digest == null) {
@@ -1953,6 +2203,10 @@ public class Database {
         }
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     private Map<String, BlobStoreWriter> getPendingAttachmentsByDigest() {
         if (pendingAttachmentsByDigest == null) {
             pendingAttachmentsByDigest = new HashMap<String, BlobStoreWriter>();
@@ -1960,7 +2214,10 @@ public class Database {
         return pendingAttachmentsByDigest;
     }
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void copyAttachmentNamedFromSequenceToSequence(String name, long fromSeq, long toSeq) throws CouchbaseLiteException {
         assert(name != null);
         assert(toSeq > 0);
@@ -1999,7 +2256,9 @@ public class Database {
 
     /**
      * Returns the content and MIME type of an attachment
+     * @exclude
      */
+    @InterfaceAudience.Private
     public Attachment getAttachmentForSequence(long sequence, String filename) throws CouchbaseLiteException {
         assert(sequence > 0);
         assert(filename != null);
@@ -2040,7 +2299,9 @@ public class Database {
 
     /**
      * Returns the location of an attachment's file in the blob store.
+     * @exclude
      */
+    @InterfaceAudience.Private
     String getAttachmentPathForSequence(long sequence, String filename) throws CouchbaseLiteException {
 
         assert(sequence > 0);
@@ -2072,7 +2333,9 @@ public class Database {
 
     /**
      * Constructs an "_attachments" dictionary for a revision, to be inserted in its JSON body.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public Map<String,Object> getAttachmentsDictForSequenceWithContent(long sequence, EnumSet<TDContentOptions> contentOptions) {
         assert(sequence > 0);
 
@@ -2159,9 +2422,11 @@ public class Database {
     /**
      * Modifies a RevisionInternal's body by changing all attachments with revpos < minRevPos into stubs.
      *
+     * @exclude
      * @param rev
      * @param minRevPos
      */
+    @InterfaceAudience.Private
     public void stubOutAttachmentsIn(RevisionInternal rev, int minRevPos)
     {
         if (minRevPos <= 1) {
@@ -2198,6 +2463,10 @@ public class Database {
             rev.setProperties(editedProperties);
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     void stubOutAttachmentsInRevision(Map<String, AttachmentInternal> attachments, RevisionInternal rev) {
 
         Map<String, Object> properties = rev.getProperties();
@@ -2231,7 +2500,9 @@ public class Database {
     /**
      * Given a newly-added revision, adds the necessary attachment rows to the sqliteDb and
      * stores inline attachments into the blob store.
+     * @exclude
      */
+    @InterfaceAudience.Private
     void processAttachmentsForRevision(Map<String, AttachmentInternal> attachments, RevisionInternal rev, long parentSequence) throws CouchbaseLiteException {
 
         assert(rev != null);
@@ -2280,7 +2551,9 @@ public class Database {
     /**
      * Updates or deletes an attachment, creating a new document revision in the process.
      * Used by the PUT / DELETE methods called on attachment URLs.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public RevisionInternal updateAttachment(String filename, InputStream contentStream, String contentType, String docID, String oldRevID) throws CouchbaseLiteException {
 
         boolean isSuccessful = false;
@@ -2358,12 +2631,19 @@ public class Database {
 
     }
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void rememberAttachmentWritersForDigests(Map<String, BlobStoreWriter> blobsByDigest) {
 
         getPendingAttachmentsByDigest().putAll(blobsByDigest);
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     void rememberAttachmentWriter(BlobStoreWriter writer) {
         getPendingAttachmentsByDigest().put(writer.mD5DigestString(), writer);
     }
@@ -2371,7 +2651,9 @@ public class Database {
 
      /**
       * Deletes obsolete attachments from the sqliteDb and blob store.
+      * @exclude
       */
+     @InterfaceAudience.Private
     public Status garbageCollectAttachments() {
         // First delete attachment rows for already-cleared revisions:
         // OPT: Could start after last sequence# we GC'd up to
@@ -2421,6 +2703,10 @@ public class Database {
 
     /** DOCUMENT & REV IDS: **/
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static boolean isValidDocumentId(String id) {
         // http://wiki.apache.org/couchdb/HTTP_Document_API#Documents
         if(id == null || id.length() == 0) {
@@ -2433,10 +2719,18 @@ public class Database {
         // "_local/*" is not a valid document ID. Local docs have their own API and shouldn't get here.
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static String generateDocumentId() {
         return Misc.TDCreateUUID();
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String generateNextRevisionID(String revisionId) {
         // Revision IDs have a generation count, a hyphen, and a UUID.
         int generation = 0;
@@ -2450,6 +2744,10 @@ public class Database {
         return Integer.toString(generation + 1) + "-" + digest;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public long insertDocumentID(String docId) {
         long rowId = -1;
         try {
@@ -2462,6 +2760,10 @@ public class Database {
         return rowId;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public long getOrInsertDocNumericID(String docId) {
         long docNumericId = getDocNumericID(docId);
         if(docNumericId == 0) {
@@ -2472,7 +2774,9 @@ public class Database {
 
     /**
      * Parses the _revisions dict from a document into an array of revision ID strings
+     * @exclude
      */
+    @InterfaceAudience.Private
     public static List<String> parseCouchDBRevisionHistory(Map<String,Object> docProperties) {
         Map<String,Object> revisions = (Map<String,Object>)docProperties.get("_revisions");
         if(revisions == null) {
@@ -2491,6 +2795,10 @@ public class Database {
 
     /** INSERTION: **/
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public byte[] encodeDocumentJSON(RevisionInternal rev) {
 
         Map<String,Object> origProps = rev.getProperties();
@@ -2520,6 +2828,10 @@ public class Database {
         return json;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void notifyChange(RevisionInternal rev, RevisionInternal winningRev, URL source, boolean inConflict) {
 
         // TODO: it is currently sending one change at a time rather than batching them up
@@ -2536,10 +2848,6 @@ public class Database {
         changes.add(change);
         ChangeEvent changeEvent = new ChangeEvent(this, isExternalFixMe, changes);
 
-        for (ChangeListener changeListener : changeListeners) {
-            changeListener.changed(changeEvent);
-        }
-
         // TODO: this is expensive, it should be using a WeakHashMap
         // TODO: instead of loading from the DB.  iOS code below.
         /*
@@ -2554,9 +2862,18 @@ public class Database {
         Document document = getDocument(change.getDocumentId());
         document.revisionAdded(change);
 
+        synchronized (changeListeners) {
+            for (ChangeListener changeListener : changeListeners) {
+                changeListener.changed(changeEvent);
+            }
+        }
+
     }
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public long insertRevision(RevisionInternal rev, long docNumericID, long parentSequence, boolean current, byte[] data) {
         long rowId = 0;
         try {
@@ -2577,11 +2894,18 @@ public class Database {
         return rowId;
     }
 
-    // TODO: move this to internal API
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public RevisionInternal putRevision(RevisionInternal rev, String prevRevId, Status resultStatus) throws CouchbaseLiteException {
         return putRevision(rev, prevRevId, false, resultStatus);
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public RevisionInternal putRevision(RevisionInternal rev, String prevRevId,  boolean allowConflict) throws CouchbaseLiteException {
         Status ignoredStatus = new Status();
         return putRevision(rev, prevRevId, allowConflict, ignoredStatus);
@@ -2598,8 +2922,10 @@ public class Database {
      * @param allowConflict If false, an error status 409 will be returned if the insertion would create a conflict, i.e. if the previous revision already has a child.
      * @param resultStatus On return, an HTTP status code indicating success or failure.
      * @return A new RevisionInternal with the docID, revID and sequence filled in (but no body).
+     * @exclude
      */
     @SuppressWarnings("unchecked")
+    @InterfaceAudience.Private
     public RevisionInternal putRevision(RevisionInternal oldRev, String prevRevId, boolean allowConflict, Status resultStatus) throws CouchbaseLiteException {
         // prevRevId is the rev ID being replaced, or nil if an insert
         String docId = oldRev.getDocId();
@@ -2708,25 +3034,17 @@ public class Database {
                             return null;
                         }
                     } else {
-                        // Doc exists; check whether current winning revision is deleted:
-                        String[] args = { Long.toString(docNumericID) };
-                        cursor = database.rawQuery("SELECT sequence, deleted FROM revs WHERE doc_id=? and current=1 ORDER BY revid DESC LIMIT 1", args);
 
-                        if(cursor.moveToNext()) {
-                            boolean wasAlreadyDeleted = (cursor.getInt(1) > 0);
-                            if(wasAlreadyDeleted) {
-                                // Make the deleted revision no longer current:
-                                ContentValues updateContent = new ContentValues();
-                                updateContent.put("current", 0);
-                                database.update("revs", updateContent, "sequence=" + cursor.getLong(0), null);
-                            }
-                            else if (!allowConflict) {
-                                String msg = String.format("docId (%s) already exists, current not " +
-                                        "deleted, so conflict.  Did you forget to pass in a previous " +
-                                        "revision ID in the properties being saved?", docId);
-                                throw new CouchbaseLiteException(msg, Status.CONFLICT);
-                            }
+                        // Doc ID exists; check whether current winning revision is deleted:
+                        if (oldWinnerWasDeletion == true) {
+                            prevRevId = oldWinningRevID;
+                            parentSequence = getSequenceOfDocument(docNumericID, prevRevId, false);
+
+                        } else if (oldWinningRevID != null) {
+                            // The current winning revision is not deleted, so this is a conflict
+                            throw new CouchbaseLiteException(Status.CONFLICT);
                         }
+
                     }
                 }
                 else {
@@ -2804,6 +3122,10 @@ public class Database {
         return newRev;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     RevisionInternal winner(long docNumericID,
                             String oldWinningRevID,
                             boolean oldWinnerWasDeletion,
@@ -2843,9 +3165,41 @@ public class Database {
     }
 
     /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    private long getSequenceOfDocument(long docNumericId, String revId, boolean onlyCurrent) {
+
+        long result = -1;
+        Cursor cursor = null;
+        try {
+            String extraSql = (onlyCurrent ? "AND current=1" : "");
+            String sql = String.format("SELECT sequence FROM revs WHERE doc_id=? AND revid=? %s LIMIT 1", extraSql);
+            String[] args = { ""+docNumericId, revId };
+            cursor = database.rawQuery(sql, args);
+
+            if(cursor.moveToNext()) {
+                result = cursor.getLong(0);
+            }
+            else {
+                result = 0;
+            }
+        } catch (Exception e) {
+            Log.e(Database.TAG, "Error getting getSequenceOfDocument", e);
+        } finally {
+            if(cursor != null) {
+                cursor.close();
+            }
+        }
+        return result;
+    }
+
+    /**
      * Given a revision, read its _attachments dictionary (if any), convert each attachment to a
      * AttachmentInternal object, and return a dictionary mapping names->CBL_Attachments.
+     * @exclude
      */
+    @InterfaceAudience.Private
     Map<String, AttachmentInternal> getAttachmentsFromRevision(RevisionInternal rev) throws CouchbaseLiteException {
 
         Map<String, Object> revAttachments = (Map<String, Object>) rev.getPropertyForKey("_attachments");
@@ -2875,7 +3229,7 @@ public class Database {
                     throw new CouchbaseLiteException(Status.STATUS_ATTACHMENT_ERROR);
                 }
             }
-            else if (((Boolean)attachInfo.get("follows")).booleanValue() == true) {
+            else if (attachInfo.containsKey("follows") && ((Boolean)attachInfo.get("follows")).booleanValue() == true) {
                 // "follows" means the uploader provided the attachment in a separate MIME part.
                 // This means it's already been registered in _pendingAttachmentsByDigest;
                 // I just need to look it up by its "digest" property and install it into the store:
@@ -2923,8 +3277,13 @@ public class Database {
      * Inserts an already-existing revision replicated from a remote sqliteDb.
      *
      * It must already have a revision ID. This may create a conflict! The revision's history must be given; ancestor revision IDs that don't already exist locally will create phantom revisions with no content.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public void forceInsert(RevisionInternal rev, List<String> revHistory, URL source) throws CouchbaseLiteException {
+
+        RevisionInternal winningRev = null;
+        boolean inConflict = false;
 
         String docId = rev.getDocId();
         String revId = rev.getRevId();
@@ -2954,11 +3313,23 @@ public class Database {
                 throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
             }
 
+            List<Boolean> outIsDeleted = new ArrayList<Boolean>();
+            List<Boolean> outIsConflict = new ArrayList<Boolean>();
+            boolean oldWinnerWasDeletion = false;
+            String oldWinningRevID = winningRevIDOfDoc(docNumericID, outIsDeleted, outIsConflict);
+            if (outIsDeleted.size() > 0) {
+                oldWinnerWasDeletion = true;
+            }
+            if (outIsConflict.size() > 0) {
+               inConflict = true;
+            }
+
             // Walk through the remote history in chronological order, matching each revision ID to
             // a local revision. When the list diverges, start creating blank local revisions to fill
             // in the local history:
             long sequence = 0;
             long localParentSequence = 0;
+            String localParentRevID = null;
             for(int i = revHistory.size() - 1; i >= 0; --i) {
                 revId = revHistory.get(i);
                 RevisionInternal localRev = localRevs.revWithDocIdAndRevId(docId, revId);
@@ -2967,9 +3338,17 @@ public class Database {
                     sequence = localRev.getSequence();
                     assert(sequence > 0);
                     localParentSequence = sequence;
+                    localParentRevID = revId;
                 }
                 else {
                     // This revision isn't known, so add it:
+
+                    if (sequence == localParentSequence) {
+                        // This is the point where we branch off of the existing rev tree.
+                        // If the branch wasn't from the single existing leaf, this creates a conflict.
+                        inConflict = inConflict || (!rev.isDeleted() && !revId.equals(localParentRevID));
+                    }
+
                     RevisionInternal newRev;
                     byte[] data = null;
                     boolean current = false;
@@ -3021,21 +3400,30 @@ public class Database {
                 }
             }
 
+            winningRev = winner(docNumericID, oldWinningRevID, oldWinnerWasDeletion, rev);
+
             success = true;
+
+            // Notify and return:
+            notifyChange(rev, winningRev, source, inConflict);
+
+
         } catch(SQLException e) {
             throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
         } finally {
             endTransaction(success);
         }
 
-        // Notify and return:
-        boolean inConflict = false;  // TODO: can we be in conflict here?
-        RevisionInternal winningRev = null;  // TODO: what should we do here?
-        notifyChange(rev, winningRev, source, inConflict);
+
+
     }
 
     /** VALIDATION **/
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void validateRevision(RevisionInternal newRev, RevisionInternal oldRev) throws CouchbaseLiteException {
         if(validations == null || validations.size() == 0) {
             return;
@@ -3044,7 +3432,8 @@ public class Database {
         SavedRevision publicRev = new SavedRevision(this, newRev);
         for (String validationName : validations.keySet()) {
             Validator validation = getValidation(validationName);
-            if(!validation.validate(publicRev, context)) {
+            validation.validate(publicRev, context);
+            if(context.getRejectMessage() != null) {
                 throw new CouchbaseLiteException(context.getRejectMessage(), Status.FORBIDDEN);
             }
         }
@@ -3054,7 +3443,10 @@ public class Database {
     /*** Database+Replication                                                                    ***/
     /*************************************************************************************************/
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public Replication getActiveReplicator(URL remote, boolean push) {
         if(activeReplicators != null) {
             for (Replication replicator : activeReplicators) {
@@ -3066,12 +3458,20 @@ public class Database {
         return null;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public Replication getReplicator(URL remote, boolean push, boolean continuous, ScheduledExecutorService workExecutor) {
         Replication replicator = getReplicator(remote, null, push, continuous, workExecutor);
 
     	return replicator;
     }
-    
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public Replication getReplicator(String sessionId) {
     	if(activeReplicators != null) {
             for (Replication replicator : activeReplicators) {
@@ -3083,6 +3483,9 @@ public class Database {
         return null;
     }
 
+    /**
+     * @exclude
+     */
     @InterfaceAudience.Private
     public Replication getReplicator(URL remote, HttpClientFactory httpClientFactory, boolean push, boolean continuous,
                                      ScheduledExecutorService workExecutor) {
@@ -3099,6 +3502,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public String lastSequenceWithRemoteURL(URL url, boolean push) {
         Cursor cursor = null;
         String result = null;
@@ -3119,6 +3526,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public boolean setLastSequence(String lastSequence, URL url, boolean push) {
         ContentValues values = new ContentValues();
         values.put("remote", url.toExternalForm());
@@ -3128,10 +3539,18 @@ public class Database {
         return (newId == -1);
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static String quote(String string) {
         return string.replace("'", "''");
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static String joinQuotedObjects(List<Object> objects) {
         List<String> strings = new ArrayList<String>();
         for (Object object : objects) {
@@ -3140,6 +3559,10 @@ public class Database {
         return joinQuoted(strings);
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public static String joinQuoted(List<String> strings) {
         if(strings.size() == 0) {
             return "";
@@ -3161,6 +3584,10 @@ public class Database {
         return result;
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public boolean findMissingRevisions(RevisionList touchRevs) {
         if(touchRevs.size() == 0) {
             return true;
@@ -3204,12 +3631,18 @@ public class Database {
     /*** Database+LocalDocs                                                                      ***/
     /*************************************************************************************************/
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     static String makeLocalDocumentId(String documentId) {
         return String.format("_local/%s", documentId);
     }
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public RevisionInternal putLocalRevision(RevisionInternal revision, String prevRevID) throws CouchbaseLiteException {
         String docID = revision.getDocId();
         if(!docID.startsWith("_local/")) {
@@ -3265,12 +3698,17 @@ public class Database {
      * anonymous View and then deleting it immediately after querying it. It may be useful during
      * development, but in general this is inefficient if this map will be used more than once,
      * because the entire view has to be regenerated from scratch every time.
+     * @exclude
      */
+    @InterfaceAudience.Private
     public Query slowQuery(Mapper map) {
         return new Query(this, map);
     }
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     RevisionInternal getParentRevision(RevisionInternal rev) {
 
         // First get the parent's sequence:
@@ -3311,7 +3749,10 @@ public class Database {
         return result;
     }
 
-
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     long longForQuery(String sqlQuery, String[] args) throws SQLException {
         Cursor cursor = null;
         long result = 0;
@@ -3333,8 +3774,10 @@ public class Database {
      * This operation is described here: http://wiki.apache.org/couchdb/Purge_Documents
      * @param docsToRevs  A dictionary mapping document IDs to arrays of revision IDs.
      * @resultOn success will point to an NSDictionary with the same form as docsToRev, containing the doc/revision IDs that were actually removed.
+     * @exclude
      */
-    Map<String, Object> purgeRevisions(final Map<String, List<String>> docsToRevs) {
+    @InterfaceAudience.Private
+    public Map<String, Object> purgeRevisions(final Map<String, List<String>> docsToRevs) {
 
         final Map<String, Object> result = new HashMap<String, Object>();
         runInTransaction(new TransactionTask() {
@@ -3345,7 +3788,7 @@ public class Database {
                     if (docNumericID == -1) {
                         continue; // no such document, skip it
                     }
-                    List<String> revsPurged = null;
+                    List<String> revsPurged = new ArrayList<String>();
                     List<String> revIDs = (List<String>) docsToRevs.get(docID);
                     if (revIDs == null) {
                         return false;
@@ -3440,6 +3883,10 @@ public class Database {
 
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     protected boolean replaceUUIDs() {
         String query = "UPDATE INFO SET value='"+ Misc.TDCreateUUID()+"' where key = 'privateUUID';";
         try {
@@ -3458,6 +3905,9 @@ public class Database {
         return true;
     }
 
+    /**
+     * @exclude
+     */
     @InterfaceAudience.Private
     public RevisionInternal getLocalDocument(String docID, String revID) {
         // docID already should contain "_local/" prefix
@@ -3497,6 +3947,18 @@ public class Database {
 
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public long getStartTime() {
+        return this.startTime;
+    }
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
     public void deleteLocalDocument(String docID, String revID) throws CouchbaseLiteException {
         if(docID == null) {
             throw new CouchbaseLiteException(Status.BAD_REQUEST);
@@ -3528,124 +3990,14 @@ public class Database {
 
     /**
      * Set the database's name.
+     * @exclude
      */
     @InterfaceAudience.Private
     public void setName(String name) {
         this.name = name;
     }
 
-    public static class ChangeEvent {
-
-        private Database source;
-        private boolean isExternal;
-        private List<DocumentChange> changes;
-
-        public ChangeEvent(Database source, boolean isExternal, List<DocumentChange> changes) {
-            this.source = source;
-            this.isExternal = isExternal;
-            this.changes = changes;
-        }
-
-        public Database getSource() {
-            return source;
-        }
-
-        public boolean isExternal() {
-            return isExternal;
-        }
-
-        public List<DocumentChange> getChanges() {
-            return changes;
-        }
-
-    }
-
-    public static interface ChangeListener {
-        public void changed(ChangeEvent event);
-    }
 
 
-}
 
-class ValidationContextImpl implements ValidationContext {
-
-    private Database database;
-    private RevisionInternal currentRevision;
-    private RevisionInternal newRev;
-    private String rejectMessage;
-    private List<String> changedKeys;
-
-    ValidationContextImpl(Database database, RevisionInternal currentRevision, RevisionInternal newRev) {
-        this.database = database;
-        this.currentRevision = currentRevision;
-        this.newRev = newRev;
-    }
-
-    RevisionInternal getCurrentRevisionInternal() {
-        if (currentRevision != null) {
-            try {
-                currentRevision = database.loadRevisionBody(currentRevision, EnumSet.noneOf(Database.TDContentOptions.class));
-            } catch (CouchbaseLiteException e) {
-                throw new RuntimeException(e);
-            }
-        }
-        return currentRevision;
-    }
-
-    @Override
-    public SavedRevision getCurrentRevision() {
-        final RevisionInternal cur = getCurrentRevisionInternal();
-        return cur != null ? new SavedRevision(database, cur) : null;
-    }
-
-    @Override
-    public List<String> getChangedKeys() {
-        if (changedKeys == null) {
-            changedKeys = new ArrayList<String>();
-            Map<String, Object> cur = getCurrentRevision().getProperties();
-            Map<String, Object> nuu = newRev.getProperties();
-            for (String key : cur.keySet()) {
-                if (!cur.get(key).equals(nuu.get(key)) && !key.equals("_rev")) {
-                    changedKeys.add(key);
-                }
-            }
-            for (String key : nuu.keySet()) {
-                if (cur.get(key) == null && !key.equals("_rev") && !key.equals("_id")) {
-                    changedKeys.add(key);
-                }
-            }
-        }
-        return changedKeys;
-    }
-
-    @Override
-    public void reject() {
-        if (rejectMessage == null) {
-            rejectMessage = "invalid document";
-        }
-    }
-
-    @Override
-    public void reject(String message) {
-        if (rejectMessage == null) {
-            rejectMessage = message;
-        }
-    }
-
-    @Override
-    public boolean validateChanges(ChangeValidator changeValidator) {
-        Map<String, Object> cur = getCurrentRevision().getProperties();
-        Map<String, Object> nuu = newRev.getProperties();
-        for (String key : getChangedKeys()) {
-            if (!changeValidator.validateChange(key, cur.get(key), nuu.get(key))) {
-                reject(String.format("Illegal change to '%s' property", key));
-                return false;
-            }
-        }
-        return true;
-    }
-
-    String getRejectMessage() {
-        return rejectMessage;
-    }
 }

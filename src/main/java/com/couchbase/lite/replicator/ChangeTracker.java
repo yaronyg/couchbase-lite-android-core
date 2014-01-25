@@ -4,6 +4,7 @@ import com.couchbase.lite.CouchbaseLiteException;
 import com.couchbase.lite.Database;
 import com.couchbase.lite.Manager;
 import com.couchbase.lite.Status;
+import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.util.Log;
 import com.couchbase.lite.util.URIUtils;
 
@@ -44,7 +45,10 @@ import java.util.Map;
 /**
  * Reads the continuous-mode _changes feed of a database, and sends the
  * individual change entries to its client's changeTrackerReceivedChange()
+ *
+ * @exclude
  */
+@InterfaceAudience.Private
 public class ChangeTracker implements Runnable {
 
     private URL databaseURL;
@@ -62,6 +66,7 @@ public class ChangeTracker implements Runnable {
 
     private Throwable error;
     protected Map<String, Object> requestHeaders;
+    protected ChangeTrackerBackoff backoff;
 
 
     public enum ChangeTrackerMode {
@@ -187,7 +192,7 @@ public class ChangeTracker implements Runnable {
         }
 
         httpClient = client.getHttpClient();
-        ChangeTrackerBackoff backoff = new ChangeTrackerBackoff();
+        backoff = new ChangeTrackerBackoff();
 
         while (running) {
 
@@ -255,6 +260,7 @@ public class ChangeTracker implements Runnable {
                         boolean responseOK = receivedPollResponse(fullBody);
                         if (mode == ChangeTrackerMode.LongPoll && responseOK) {
                             Log.v(Database.TAG, "Starting new longpoll");
+                            backoff.resetBackoff();
                             continue;
                         } else {
                             Log.w(Database.TAG, "Change tracker calling stop");

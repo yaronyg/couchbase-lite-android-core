@@ -30,6 +30,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 
+/**
+ * @exclude
+ */
 @InterfaceAudience.Private
 public class Pusher extends Replication implements Database.ChangeListener {
 
@@ -41,7 +44,7 @@ public class Pusher extends Replication implements Database.ChangeListener {
      * Constructor
      */
     @InterfaceAudience.Private
-    public Pusher(Database db, URL remote, boolean continuous, ScheduledExecutorService workExecutor) {
+    /* package */ public Pusher(Database db, URL remote, boolean continuous, ScheduledExecutorService workExecutor) {
         this(db, remote, continuous, null, workExecutor);
     }
 
@@ -49,7 +52,7 @@ public class Pusher extends Replication implements Database.ChangeListener {
      * Constructor
      */
     @InterfaceAudience.Private
-    public Pusher(Database db, URL remote, boolean continuous, HttpClientFactory clientFactory, ScheduledExecutorService workExecutor) {
+    /* package */ public Pusher(Database db, URL remote, boolean continuous, HttpClientFactory clientFactory, ScheduledExecutorService workExecutor) {
         super(db, remote, continuous, clientFactory, workExecutor);
         shouldCreateTarget = false;
         observing = false;
@@ -73,7 +76,16 @@ public class Pusher extends Replication implements Database.ChangeListener {
         this.shouldCreateTarget = createTarget;
     }
 
+
     @Override
+    @InterfaceAudience.Public
+    public void stop() {
+        stopObserving();
+        super.stop();
+    }
+
+    @Override
+    @InterfaceAudience.Private
     void maybeCreateRemoteDB() {
         if(!shouldCreateTarget) {
             return;
@@ -97,6 +109,7 @@ public class Pusher extends Replication implements Database.ChangeListener {
     }
 
     @Override
+    @InterfaceAudience.Private
     public void beginReplicating() {
         // If we're still waiting to create the remote db, do nothing now. (This method will be
         // re-invoked after that request finishes; see maybeCreateRemoteDB() above.)
@@ -129,12 +142,8 @@ public class Pusher extends Replication implements Database.ChangeListener {
         }
     }
 
-    @Override
-    public void stop() {
-        stopObserving();
-        super.stop();
-    }
 
+    @InterfaceAudience.Private
     private void stopObserving() {
         if(observing) {
             observing = false;
@@ -145,6 +154,7 @@ public class Pusher extends Replication implements Database.ChangeListener {
 
 
     @Override
+    @InterfaceAudience.Private
     public void changed(Database.ChangeEvent event) {
         List<DocumentChange> changes = event.getChanges();
         for (DocumentChange change : changes) {
@@ -164,9 +174,11 @@ public class Pusher extends Replication implements Database.ChangeListener {
     }
 
     @Override
-    public void processInbox(final RevisionList inbox) {
+    @InterfaceAudience.Private
+    protected void processInbox(final RevisionList inbox) {
         final long lastInboxSequence = inbox.get(inbox.size()-1).getSequence();
         // Generate a set of doc/rev IDs in the JSON format that _revs_diff wants:
+        // <http://wiki.apache.org/couchdb/HttpPostRevsDiff>
         Map<String,List<String>> diffs = new HashMap<String,List<String>>();
         for (RevisionInternal rev : inbox) {
             String docID = rev.getDocId();
@@ -216,7 +228,9 @@ public class Pusher extends Replication implements Database.ChangeListener {
                                     try {
                                         db.loadRevisionBody(rev, contentOptions);
                                     } catch (CouchbaseLiteException e1) {
-                                        throw new RuntimeException(e1);
+                                        String msg = String.format("%s Couldn't get local contents of %s", rev, this);
+                                        Log.w(Database.TAG, msg);
+                                        continue;
                                     }
                                     properties = new HashMap<String,Object>(rev.getProperties());
 
@@ -239,28 +253,29 @@ public class Pusher extends Replication implements Database.ChangeListener {
                     // Post the revisions to the destination. "new_edits":false means that the server should
                     // use the given _rev IDs instead of making up new ones.
                     final int numDocsToSend = docsToSend.size();
-                    Map<String,Object> bulkDocsBody = new HashMap<String,Object>();
-                    bulkDocsBody.put("docs", docsToSend);
-                    bulkDocsBody.put("new_edits", false);
-                    Log.i(Database.TAG, String.format("%s: Sending %d revisions", this, numDocsToSend));
-                    Log.v(Database.TAG, String.format("%s: Sending %s", this, inbox));
-                    setChangesCount(getChangesCount() + numDocsToSend);
-                    asyncTaskStarted();
-                    sendAsyncRequest("POST", "/_bulk_docs", bulkDocsBody, new RemoteRequestCompletionBlock() {
+                    if (numDocsToSend > 0 ) {
+                        Map<String,Object> bulkDocsBody = new HashMap<String,Object>();
+                        bulkDocsBody.put("docs", docsToSend);
+                        bulkDocsBody.put("new_edits", false);
+                        Log.i(Database.TAG, String.format("%s: Sending %d revisions", this, numDocsToSend));
+                        Log.v(Database.TAG, String.format("%s: Sending %s", this, inbox));
+                        setChangesCount(getChangesCount() + numDocsToSend);
+                        asyncTaskStarted();
+                        sendAsyncRequest("POST", "/_bulk_docs", bulkDocsBody, new RemoteRequestCompletionBlock() {
 
-                        @Override
-                        public void onCompletion(Object result, Throwable e) {
-                            if(e != null) {
-                                error = e;
-                            } else {
-                                Log.v(Database.TAG, String.format("%s: Sent %s", this, inbox));
-                                setLastSequence(String.format("%d", lastInboxSequence));
+                            @Override
+                            public void onCompletion(Object result, Throwable e) {
+                                if(e != null) {
+                                    error = e;
+                                } else {
+                                    Log.v(Database.TAG, String.format("%s: Sent %s", this, inbox));
+                                    setLastSequence(String.format("%d", lastInboxSequence));
+                                }
+                                setCompletedChangesCount(getCompletedChangesCount() + numDocsToSend);
+                                asyncTaskFinished(1);
                             }
-                            setCompletedChangesCount(getCompletedChangesCount() + numDocsToSend);
-                            asyncTaskFinished(1);
-                        }
-                    });
-
+                        });
+                    }
                 } else {
                     // If none of the revisions are new to the remote, just bump the lastSequence:
                     setLastSequence(String.format("%d", lastInboxSequence));
@@ -271,6 +286,7 @@ public class Pusher extends Replication implements Database.ChangeListener {
         });
     }
 
+    @InterfaceAudience.Private
     private boolean uploadMultipartRevision(RevisionInternal revision) {
 
         MultipartEntity multiPart = null;

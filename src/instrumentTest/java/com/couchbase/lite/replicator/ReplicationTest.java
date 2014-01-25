@@ -1,6 +1,15 @@
 package com.couchbase.lite.replicator;
 
-import com.couchbase.lite.*;
+import com.couchbase.lite.CouchbaseLiteException;
+import com.couchbase.lite.Database;
+import com.couchbase.lite.Document;
+import com.couchbase.lite.Emitter;
+import com.couchbase.lite.LiteTestCase;
+import com.couchbase.lite.LiveQuery;
+import com.couchbase.lite.Mapper;
+import com.couchbase.lite.Status;
+import com.couchbase.lite.UnsavedRevision;
+import com.couchbase.lite.View;
 import com.couchbase.lite.auth.FacebookAuthorizer;
 import com.couchbase.lite.internal.Body;
 import com.couchbase.lite.internal.RevisionInternal;
@@ -15,6 +24,7 @@ import org.apache.http.*;
 import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpPut;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.DefaultHttpClient;
@@ -31,6 +41,101 @@ import java.util.concurrent.TimeUnit;
 public class ReplicationTest extends LiteTestCase {
 
     public static final String TAG = "Replicator";
+
+    // Reproduces issue #167
+    // https://github.com/couchbase/couchbase-lite-android/issues/167
+    public void testPushPurgedDoc() throws Throwable {
+
+        int numBulkDocRequests = 0;
+        HttpPost lastBulkDocsRequest = null;
+
+        Map<String,Object> properties = new HashMap<String, Object>();
+        properties.put("testName", "testPurgeDocument");
+
+        Document doc = createDocumentWithProperties(database, properties);
+        assertNotNull(doc);
+
+        final CustomizableMockHttpClient mockHttpClient = new CustomizableMockHttpClient();
+        mockHttpClient.addResponderRevDiffsAllMissing();
+        mockHttpClient.setResponseDelayMilliseconds(250);
+
+        HttpClientFactory mockHttpClientFactory = new HttpClientFactory() {
+            @Override
+            public HttpClient getHttpClient() {
+                return mockHttpClient;
+            }
+        };
+
+        URL remote = getReplicationURL();
+
+        manager.setDefaultHttpClientFactory(mockHttpClientFactory);
+        Replication pusher = database.createPushReplication(remote);
+        pusher.setContinuous(true);
+        pusher.start();
+
+        final CountDownLatch replicationCaughtUpSignal = new CountDownLatch(1);
+
+        pusher.addChangeListener(new Replication.ChangeListener() {
+            @Override
+            public void changed(Replication.ChangeEvent event) {
+                final int changesCount = event.getSource().getChangesCount();
+                final int completedChangesCount = event.getSource().getCompletedChangesCount();
+                String msg = String.format("changes: %d completed changes: %d", changesCount, completedChangesCount);
+                Log.d(TAG, msg);
+                if (changesCount == completedChangesCount) {
+                    replicationCaughtUpSignal.countDown();
+                }
+            }
+        });
+
+        // wait until that doc is pushed
+        boolean didNotTimeOut = replicationCaughtUpSignal.await(5, TimeUnit.SECONDS);
+        assertTrue(didNotTimeOut);
+
+        // at this point, we should have captured exactly 1 bulk docs request
+        numBulkDocRequests = 0;
+        for (HttpRequest capturedRequest : mockHttpClient.getCapturedRequests()) {
+            if (capturedRequest instanceof  HttpPost && ((HttpPost) capturedRequest).getURI().toString().endsWith("_bulk_docs")) {
+                lastBulkDocsRequest = (HttpPost) capturedRequest;
+                numBulkDocRequests += 1;
+            }
+        }
+        assertEquals(1, numBulkDocRequests);
+
+        // that bulk docs request should have the "start" key under its _revisions
+        Map<String, Object> jsonMap = mockHttpClient.getJsonMapFromRequest((HttpPost) lastBulkDocsRequest);
+        List docs = (List) jsonMap.get("docs");
+        Map<String, Object> onlyDoc = (Map) docs.get(0);
+        Map<String, Object> revisions = (Map) onlyDoc.get("_revisions");
+        assertTrue(revisions.containsKey("start"));
+
+        // now add a new revision, which will trigger the pusher to try to push it
+        properties = new HashMap<String, Object>();
+        properties.put("testName2", "update doc");
+        UnsavedRevision unsavedRevision = doc.createRevision();
+        unsavedRevision.setUserProperties(properties);
+        unsavedRevision.save();
+
+        // but then immediately purge it
+        assertTrue(doc.purge());
+
+        // wait for a while to give the replicator a chance to push it
+        // (it should not actually push anything)
+        Thread.sleep(5*1000);
+
+        // we should not have gotten any more _bulk_docs requests, because
+        // the replicator should not have pushed anything else.
+        // (in the case of the bug, it was trying to push the purged revision)
+        numBulkDocRequests = 0;
+        for (HttpRequest capturedRequest : mockHttpClient.getCapturedRequests()) {
+            if (capturedRequest instanceof  HttpPost && ((HttpPost) capturedRequest).getURI().toString().endsWith("_bulk_docs")) {
+                numBulkDocRequests += 1;
+            }
+        }
+        assertEquals(1, numBulkDocRequests);
+
+
+    }
 
     public void testPusher() throws Throwable {
 
@@ -70,7 +175,7 @@ public class ReplicationTest extends LiteTestCase {
         assertEquals(Status.CREATED, status.getCode());
 
         final boolean continuous = false;
-        final Replication repl = database.getPushReplication(remote);
+        final Replication repl = database.createPushReplication(remote);
         repl.setContinuous(continuous);
 
         repl.setCreateTarget(true);
@@ -145,7 +250,7 @@ public class ReplicationTest extends LiteTestCase {
 
         Log.d(TAG, "Waiting for http request to finish");
         try {
-            httpRequestDoneSignal.await();
+            httpRequestDoneSignal.await(300, TimeUnit.SECONDS);
             Log.d(TAG, "http request finished");
         } catch (InterruptedException e) {
             e.printStackTrace();
@@ -185,7 +290,7 @@ public class ReplicationTest extends LiteTestCase {
         RevisionInternal rev2 = database.putRevision(new RevisionInternal(documentProperties, database), rev1.getRevId(), false, status);
         assertTrue(status.getCode() >= 200 && status.getCode() < 300);
 
-        final Replication repl = database.getPushReplication(remote);
+        final Replication repl = database.createPushReplication(remote);
         ((Pusher)repl).setCreateTarget(true);
 
         runReplication(repl);
@@ -226,7 +331,7 @@ public class ReplicationTest extends LiteTestCase {
 
         Log.d(TAG, "Waiting for http request to finish");
         try {
-            httpRequestDoneSignal.await();
+            httpRequestDoneSignal.await(300, TimeUnit.SECONDS);
             Log.d(TAG, "http request finished");
         } catch (InterruptedException e) {
             e.printStackTrace();
@@ -252,16 +357,32 @@ public class ReplicationTest extends LiteTestCase {
         doPullReplication();
 
         Log.d(TAG, "Fetching doc1 via id: " + doc1Id);
-        RevisionInternal doc1 = database.getDocumentWithIDAndRev(doc1Id, null, EnumSet.noneOf(Database.TDContentOptions.class));
+        Document doc1 = database.getDocument(doc1Id);
         assertNotNull(doc1);
-        assertTrue(doc1.getRevId().startsWith("1-"));
+        assertTrue(doc1.getCurrentRevisionId().startsWith("1-"));
         assertEquals(1, doc1.getProperties().get("foo"));
 
         Log.d(TAG, "Fetching doc2 via id: " + doc2Id);
-        RevisionInternal doc2 = database.getDocumentWithIDAndRev(doc2Id, null, EnumSet.noneOf(Database.TDContentOptions.class));
+                Document doc2 = database.getDocument(doc2Id);
         assertNotNull(doc2);
-        assertTrue(doc2.getRevId().startsWith("1-"));
+        assertTrue(doc2.getCurrentRevisionId().startsWith("1-"));
         assertEquals(1, doc2.getProperties().get("foo"));
+
+        // update doc1 on sync gateway
+        String docJson = String.format("{\"foo\":2,\"bar\":true,\"_rev\":\"%s\",\"_id\":\"%s\"}", doc1.getCurrentRevisionId(), doc1.getId());
+        pushDocumentToSyncGateway(doc1.getId(), docJson);
+
+        // workaround for https://github.com/couchbase/sync_gateway/issues/228
+        Thread.sleep(1000);
+
+        // do another pull
+        doPullReplication();
+
+        // make sure it has the latest properties
+        Document doc1Fetched = database.getDocument(doc1Id);
+        assertNotNull(doc1Fetched);
+        assertTrue(doc1Fetched.getCurrentRevisionId().startsWith("2-"));
+        assertEquals(2, doc1Fetched.getProperties().get("foo"));
 
         Log.d(TAG, "testPuller() finished");
 
@@ -328,12 +449,13 @@ public class ReplicationTest extends LiteTestCase {
 
         CountDownLatch replicationDoneSignal = new CountDownLatch(1);
 
-        final Replication repl = (Replication) database.getPullReplication(remote);
+        final Replication repl = (Replication) database.createPullReplication(remote);
         repl.setContinuous(false);
 
         runReplication(repl);
 
     }
+
 
     private void addDocWithId(String docId, String attachmentName) throws IOException {
 
@@ -350,7 +472,12 @@ public class ReplicationTest extends LiteTestCase {
         else {
             docJson = "{\"foo\":1,\"bar\":false}";
         }
+        pushDocumentToSyncGateway(docId, docJson);
 
+
+    }
+
+    private void pushDocumentToSyncGateway(String docId, final String docJson) throws MalformedURLException {
         // push a document to server
         URL replicationUrlTrailingDoc1 = new URL(String.format("%s/%s", getReplicationURL().toExternalForm(), docId));
         final URL pathToDoc1 = new URL(replicationUrlTrailingDoc1, docId);
@@ -362,7 +489,7 @@ public class ReplicationTest extends LiteTestCase {
             @Override
             public void run() {
 
-                org.apache.http.client.HttpClient httpclient = new DefaultHttpClient();
+                HttpClient httpclient = new DefaultHttpClient();
 
                 HttpResponse response;
                 String responseString = null;
@@ -390,7 +517,7 @@ public class ReplicationTest extends LiteTestCase {
 
         Log.d(TAG, "Waiting for http request to finish");
         try {
-            httpRequestDoneSignal.await();
+            httpRequestDoneSignal.await(300, TimeUnit.SECONDS);
             Log.d(TAG, "http request finished");
         } catch (InterruptedException e) {
             e.printStackTrace();
@@ -445,10 +572,10 @@ public class ReplicationTest extends LiteTestCase {
 
         Log.d(TAG, "Waiting for replicator to finish");
         try {
-            boolean success = replicationDoneSignal.await(30, TimeUnit.SECONDS);
+            boolean success = replicationDoneSignal.await(300, TimeUnit.SECONDS);
             assertTrue(success);
 
-            success = replicationDoneSignalPolling.await(30, TimeUnit.SECONDS);
+            success = replicationDoneSignalPolling.await(300, TimeUnit.SECONDS);
             assertTrue(success);
 
             Log.d(TAG, "replicator finished");
@@ -587,7 +714,7 @@ public class ReplicationTest extends LiteTestCase {
 
         Log.d(TAG, "testFetchRemoteCheckpointDoc() Waiting for replicator to finish");
         try {
-            boolean succeeded = doneSignal.await(30, TimeUnit.SECONDS);
+            boolean succeeded = doneSignal.await(300, TimeUnit.SECONDS);
             assertTrue(succeeded);
             Log.d(TAG, "testFetchRemoteCheckpointDoc() replicator finished");
         } catch (InterruptedException e) {
@@ -606,7 +733,7 @@ public class ReplicationTest extends LiteTestCase {
 
         CountDownLatch replicationDoneSignal = new CountDownLatch(1);
 
-        Replication repl = database.getPullReplication(remote);
+        Replication repl = database.createPullReplication(remote);
         repl.setContinuous(true);
         repl.start();
 
@@ -671,7 +798,7 @@ public class ReplicationTest extends LiteTestCase {
     public void testChannels() throws Exception {
 
         URL remote = getReplicationURL();
-        Replication replicator = database.getPullReplication(remote);
+        Replication replicator = database.createPullReplication(remote);
         List<String> channels = new ArrayList<String>();
         channels.add("chan1");
         channels.add("chan2");
@@ -682,11 +809,11 @@ public class ReplicationTest extends LiteTestCase {
 
     }
 
-    public void testChannelsMore() throws MalformedURLException {
+    public void testChannelsMore() throws MalformedURLException, CouchbaseLiteException {
 
         Database  db = startDatabase();
         URL fakeRemoteURL = new URL("http://couchbase.com/no_such_db");
-        Replication r1 = db.getPullReplication(fakeRemoteURL);
+        Replication r1 = db.createPullReplication(fakeRemoteURL);
 
         assertTrue(r1.getChannels().isEmpty());
         r1.setFilter("foo/bar");
@@ -730,12 +857,10 @@ public class ReplicationTest extends LiteTestCase {
         };
 
         URL remote = getReplicationURL();
-        Replication puller = new Puller(
-                database,
-                remote,
-                false,
-                mockHttpClientFactory,
-                manager.getWorkExecutor());
+
+        manager.setDefaultHttpClientFactory(mockHttpClientFactory);
+        Replication puller = database.createPullReplication(remote);
+
         Map<String, Object> headers = new HashMap<String, Object>();
         headers.put("foo", "bar");
         puller.setHeaders(headers);
@@ -755,7 +880,7 @@ public class ReplicationTest extends LiteTestCase {
         }
 
         Assert.assertTrue(foundFooHeader);
-
+        manager.setDefaultHttpClientFactory(null);
 
     }
 

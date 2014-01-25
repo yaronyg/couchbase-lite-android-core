@@ -39,7 +39,7 @@ public class RouterTest extends LiteTestCase {
         send("GET", "/_all_dbs", Status.OK, allDbs);
 
         send("GET", "/non-existant", Status.NOT_FOUND, null);
-        send("GET", "/BadName", Status.NOT_FOUND, null);
+        send("GET", "/BadName", Status.BAD_REQUEST, null);
         send("PUT", "/", Status.BAD_REQUEST, null);
         send("POST", "/", Status.BAD_REQUEST, null);
     }
@@ -350,7 +350,7 @@ public class RouterTest extends LiteTestCase {
         assertEquals(expectedRowsWithDocs, rows);
     }
 
-    public void testViews() {
+    public void testViews() throws CouchbaseLiteException {
         send("PUT", "/db", Status.CREATED, null);
 
         Map<String,Object> result;
@@ -453,7 +453,7 @@ public class RouterTest extends LiteTestCase {
         assertNotNull(bulk_result.get(1).get("rev"));
     }
 
-    public void testPostKeysView() {
+    public void testPostKeysView() throws CouchbaseLiteException {
     	send("PUT", "/db", Status.CREATED, null);
 
     	Map<String,Object> result;
