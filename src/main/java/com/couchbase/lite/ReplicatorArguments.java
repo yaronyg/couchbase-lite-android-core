@@ -21,6 +21,7 @@ public class ReplicatorArguments {
 
     private final Map<String, Object> rawProperties;
     private final Map<String, Object> queryParams;
+    private final Map<String, Object> headers;
     private String source;
     private String target;
     private final Map<String, Object> sourceAuth;
@@ -37,6 +38,7 @@ public class ReplicatorArguments {
         queryParams = (Map<String,Object>)properties.get(queryParamsFieldName);
         Map<String, Object> sourceMap = parseSourceOrTarget(properties, sourceFieldName);
         Map<String, Object> targetMap = parseSourceOrTarget(properties, targetFieldName);
+        headers = (Map<String, Object>)properties.get("headers");
         sourceAuth = (Map<String, Object>) sourceMap.get(authFieldName);
         targetAuth = (Map<String, Object>) targetMap.get(authFieldName);
 
@@ -44,13 +46,13 @@ public class ReplicatorArguments {
         target = (String)targetMap.get(urlFieldName);
 
         Boolean createTargetBoolean = (Boolean)properties.get(createTargetFieldName);
-        createTarget = (createTargetBoolean != null && createTargetBoolean.booleanValue());
+        createTarget = (createTargetBoolean != null && createTargetBoolean);
 
         Boolean continuousBoolean = (Boolean)properties.get(continuousFieldName);
-        continuous = (continuousBoolean != null && continuousBoolean.booleanValue());
+        continuous = (continuousBoolean != null && continuousBoolean);
 
         Boolean cancelBoolean = (Boolean)properties.get(cancelFieldName);
-        cancel = (cancelBoolean != null && cancelBoolean.booleanValue());
+        cancel = (cancelBoolean != null && cancelBoolean);
 
         if(source == null || target == null) {
             throw new CouchbaseLiteException("source and target are both null", new Status(Status.BAD_REQUEST));
@@ -68,6 +70,8 @@ public class ReplicatorArguments {
     public Map<String, Object> getQueryParams() {
         return queryParams;
     }
+
+    public Map<String, Object> getHeaders() { return headers; }
 
     public String getSource() {
         return source;
