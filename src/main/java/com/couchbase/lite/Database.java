@@ -35,13 +35,13 @@ import com.couchbase.lite.util.TextUtils;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Array;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -82,11 +82,15 @@ public final class Database {
     private Map<String, Validator> validations;
 
     private Map<String, BlobStoreWriter> pendingAttachmentsByDigest;
-    private List<Replication> activeReplicators;
+    private Set<Replication> activeReplicators;
+    private Set<Replication> allReplicators;
+
     private BlobStore attachments;
     private Manager manager;
     final private List<ChangeListener> changeListeners;
     private LruCache<String, Document> docCache;
+    private List<DocumentChange> changesToNotify;
+    private boolean postingChangeNotifications;
 
     private int maxRevTreeDepth = DEFAULT_MAX_REVS;
 
@@ -201,6 +205,9 @@ public final class Database {
         this.changeListeners = Collections.synchronizedList(new ArrayList<ChangeListener>());
         this.docCache = new LruCache<String, Document>(MAX_DOC_CACHE_SIZE);
         this.startTime = System.currentTimeMillis();
+        this.changesToNotify = new ArrayList<DocumentChange>();
+        this.activeReplicators = Collections.synchronizedSet(new HashSet<Replication>());
+        this.allReplicators = Collections.synchronizedSet(new HashSet<Replication>());
     }
 
     /**
@@ -273,7 +280,11 @@ public final class Database {
      */
     @InterfaceAudience.Public
     public List<Replication> getAllReplications() {
-        return activeReplicators;
+        List<Replication> allReplicatorsList =  new ArrayList<Replication>();
+        if (allReplicators != null) {
+            allReplicatorsList.addAll(allReplicators);
+        }
+        return allReplicatorsList;
     }
 
     /**
@@ -761,6 +772,18 @@ public final class Database {
     }
 
     /**
+     * Get all the active replicators associated with this database.
+     */
+    @InterfaceAudience.Private
+    public List<Replication> getActiveReplications() {
+        List<Replication> activeReplicatorsList =  new ArrayList<Replication>();
+        if (activeReplicators != null) {
+            activeReplicatorsList.addAll(activeReplicators);
+        }
+        return activeReplicatorsList;
+    }
+
+    /**
      * @exclude
      */
     @InterfaceAudience.Private
@@ -840,7 +863,9 @@ public final class Database {
 
         // Try to open the storage engine and stop if we fail.
         if (database == null || !database.open(path)) {
-            return false;
+            String msg = "Unable to create a storage engine, fatal error";
+            Log.e(Database.TAG, msg);
+            throw new IllegalStateException(msg);
         }
 
         // Stuff we need to initialize every time the sqliteDb opens:
@@ -943,6 +968,8 @@ public final class Database {
             activeReplicators = null;
         }
 
+        allReplicators = null;
+
         if(database != null && database.isOpen()) {
             database.close();
         }
@@ -1042,6 +1069,9 @@ public final class Database {
         }
 
         --transactionLevel;
+        postChangeNotifications();
+
+
         return true;
     }
 
@@ -2859,18 +2889,84 @@ public final class Database {
         return json;
     }
 
+
+    @InterfaceAudience.Private
+    private void postChangeNotifications() {
+        // This is a 'while' instead of an 'if' because when we finish posting notifications, there
+        // might be new ones that have arrived as a result of notification handlers making document
+        // changes of their own (the replicator manager will do this.) So we need to check again.
+        while (transactionLevel == 0 && isOpen() && !postingChangeNotifications
+                && changesToNotify.size() > 0)
+        {
+
+            try {
+                postingChangeNotifications = true; // Disallow re-entrant calls
+
+                List<DocumentChange> outgoingChanges = new ArrayList<DocumentChange>();
+                outgoingChanges.addAll(changesToNotify);
+                changesToNotify.clear();
+
+
+                /*
+                BOOL external = NO;
+    for (CBLDatabaseChange* change in changes) {
+        // Notify the corresponding instantiated CBLDocument object (if any):
+        [[self _cachedDocumentWithID: change.documentID] revisionAdded: change];
+        if (change.source != nil)
+            external = YES;
+    }
+
+                 */
+                boolean isExternal = false;
+                for (DocumentChange change: outgoingChanges) {
+                    Document document = getDocument(change.getDocumentId());
+                    document.revisionAdded(change);
+                    if (change.getSourceUrl() != null) {
+                        isExternal = true;
+                    }
+                }
+
+                ChangeEvent changeEvent = new ChangeEvent(this, isExternal, outgoingChanges);
+
+                synchronized (changeListeners) {
+                    for (ChangeListener changeListener : changeListeners) {
+                        changeListener.changed(changeEvent);
+                    }
+                }
+
+            } catch (Exception e) {
+                Log.e(Database.TAG, this + " got exception posting change notifications", e);
+            } finally {
+                postingChangeNotifications = false;
+            }
+
+        }
+
+
+    }
+
+    private void notifyChange(DocumentChange documentChange) {
+        if (changesToNotify == null) {
+            changesToNotify = new ArrayList<DocumentChange>();
+        }
+        changesToNotify.add(documentChange);
+
+        postChangeNotifications();
+    }
+
+    private void notifyChanges(List<DocumentChange> documentChanges) {
+        if (changesToNotify == null) {
+            changesToNotify = new ArrayList<DocumentChange>();
+        }
+        changesToNotify.addAll(documentChanges);
+        postChangeNotifications();
+    }
+
     /**
      * @exclude
      */
     @InterfaceAudience.Private
     public void notifyChange(RevisionInternal rev, RevisionInternal winningRev, URL source, boolean inConflict) {
-
-        // TODO: it is currently sending one change at a time rather than batching them up
-
-        boolean isExternal = false;
-        if (source != null) {
-            isExternal = true;
-        }
 
         DocumentChange change = new DocumentChange(
                 rev,
@@ -2878,29 +2974,8 @@ public final class Database {
                 inConflict,
                 source);
 
-        List<DocumentChange> changes = new ArrayList<DocumentChange>();
-        changes.add(change);
-        ChangeEvent changeEvent = new ChangeEvent(this, isExternal, changes);
+        notifyChange(change);
 
-        // TODO: this is expensive, it should be using a WeakHashMap
-        // TODO: instead of loading from the DB.  iOS code below.
-        /*
-            ios code:
-            for (CBLDatabaseChange* change in changes) {
-            // Notify the corresponding instantiated Document object (if any):
-            [[self _cachedDocumentWithID: change.documentID] revisionAdded: change];
-            if (change.source != nil)
-                external = YES;
-            }
-         */
-        Document document = getDocument(change.getDocumentId());
-        document.revisionAdded(change);
-
-        synchronized (changeListeners) {
-            for (ChangeListener changeListener : changeListeners) {
-                changeListener.changed(changeEvent);
-            }
-        }
 
     }
 
@@ -3509,7 +3584,7 @@ public final class Database {
     @InterfaceAudience.Private
     public Replication getReplicator(String sessionId) {
     	if(activeReplicators != null) {
-            for (Replication replicator : activeReplicators) {
+            for (Replication replicator : allReplicators) {
                 if(replicator.getSessionID().equals(sessionId)) {
                     return replicator;
                 }
@@ -3530,10 +3605,6 @@ public final class Database {
         }
         result = push ? new Pusher(this, remote, continuous, httpClientFactory, workExecutor) : new Puller(this, remote, continuous, httpClientFactory, workExecutor);
 
-        if(activeReplicators == null) {
-            activeReplicators = new ArrayList<Replication>();
-        }
-        activeReplicators.add(result);
         return result;
     }
 
@@ -3541,12 +3612,14 @@ public final class Database {
      * @exclude
      */
     @InterfaceAudience.Private
-    public String lastSequenceWithRemoteURL(URL url, boolean push) {
+    public String lastSequenceWithCheckpointId(String checkpointId) {
         Cursor cursor = null;
         String result = null;
         try {
-            String[] args = { url.toExternalForm(), Integer.toString(push ? 1 : 0) };
-            cursor = database.rawQuery("SELECT last_sequence FROM replicators WHERE remote=? AND push=?", args);
+            // This table schema is out of date but I'm keeping it the way it is for compatibility.
+            // The 'remote' column now stores the opaque checkpoint IDs, and 'push' is ignored.
+            String[] args = { checkpointId };
+            cursor = database.rawQuery("SELECT last_sequence FROM replicators WHERE remote=?", args);
             if(cursor.moveToNext()) {
                 result = cursor.getString(0);
             }
@@ -3565,9 +3638,9 @@ public final class Database {
      * @exclude
      */
     @InterfaceAudience.Private
-    public boolean setLastSequence(String lastSequence, URL url, boolean push) {
+    public boolean setLastSequence(String lastSequence, String checkpointId, boolean push) {
         ContentValues values = new ContentValues();
-        values.put("remote", url.toExternalForm());
+        values.put("remote", checkpointId);
         values.put("push", push);
         values.put("last_sequence", lastSequence);
         long newId = database.insertWithOnConflict("replicators", null, values, SQLiteStorageEngine.CONFLICT_REPLACE);
@@ -4051,7 +4124,7 @@ public final class Database {
         Map<Long, Integer> toPrune = new HashMap<Long, Integer>();
 
         if (maxDepth == 0) {
-            maxDepth = DEFAULT_MAX_REVS;
+            maxDepth = getMaxRevTreeDepth();
         }
 
         // First find which docs need pruning, and by how much:
@@ -4106,6 +4179,58 @@ public final class Database {
         return outPruned;
 
     }
+
+
+    /**
+     * Is the database open?
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public boolean isOpen() {
+        return open;
+    }
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public void addReplication(Replication replication) {
+        if (allReplicators != null) {
+            allReplicators.add(replication);
+        }
+    }
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public void forgetReplication(Replication replication) {
+        allReplicators.remove(replication);
+    }
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public void addActiveReplication(Replication replication) {
+        if (activeReplicators != null) {
+            activeReplicators.add(replication);
+        }
+
+        replication.addChangeListener(new Replication.ChangeListener() {
+            @Override
+            public void changed(Replication.ChangeEvent event) {
+                if (event.getSource().isRunning() == false) {
+                    if (activeReplicators != null) {
+                        activeReplicators.remove(event.getSource());
+                    }
+                }
+            }
+        });
+
+    }
+
+
 
 
 }

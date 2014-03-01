@@ -167,7 +167,7 @@ public abstract class Replication {
                 Log.v(Database.TAG, "*** " + toString() + ": BEGIN processInbox (" + inbox.size() + " sequences)");
                 processInbox(new RevisionList(inbox));
                 Log.v(Database.TAG, "*** " + toString() + ": END processInbox (lastSequence=" + lastSequence);
-                active = false;
+                updateActive();
             }
         });
 
@@ -415,9 +415,19 @@ public abstract class Replication {
     @InterfaceAudience.Public
     public void start() {
 
+        if (!db.isOpen()) { // Race condition: db closed before replication starts
+            Log.w(Database.TAG, "Not starting replication because db.isOpen() returned false.");
+            return;
+        }
+
         if (running) {
             return;
         }
+
+        db.addReplication(this);
+        db.addActiveReplication(this);
+
+
         this.sessionID = String.format("repl%03d", ++lastSessionID);
         Log.v(Database.TAG, toString() + " STARTING ...");
         running = true;
@@ -436,9 +446,11 @@ public abstract class Replication {
             return;
         }
         Log.v(Database.TAG, toString() + " STOPPING...");
-        batcher.flush();
+        batcher.clear();  // no sense processing any pending changes
         continuous = false;
-        if (asyncTaskCount == 0) {
+        stopRemoteRequests();
+        db.forgetReplication(this);
+        if (running && asyncTaskCount == 0) {
             stopped();
         }
     }
@@ -471,7 +483,7 @@ public abstract class Replication {
     public String toString() {
         String maskedRemoteWithoutCredentials = (remote != null ? remote.toExternalForm() : "");
         maskedRemoteWithoutCredentials = maskedRemoteWithoutCredentials.replaceAll("://.*:.*@", "://---:---@");
-        String name = getClass().getSimpleName() + "[" + maskedRemoteWithoutCredentials + "]";
+        String name = getClass().getSimpleName() + "@" + Integer.toHexString(hashCode()) + "[" + maskedRemoteWithoutCredentials + "]";
         return name;
     }
 
@@ -533,7 +545,21 @@ public abstract class Replication {
     public void databaseClosing() {
         saveLastSequence();
         stop();
-        db = null;
+        clearDbRef();
+    }
+
+    /**
+     * If we're in the middle of saving the checkpoint and waiting for a response, by the time the
+     * response arrives _db will be nil, so there won't be any way to save the checkpoint locally.
+     * To avoid that, pre-emptively save the local checkpoint now.
+     *
+     * @exclude
+     */
+    private void clearDbRef() {
+        if (savingCheckpoint && lastSequence != null) {
+            db.setLastSequence(lastSequence, remoteCheckpointDocID(), !isPull());
+            db = null;
+        }
     }
 
     /**
@@ -602,29 +628,37 @@ public abstract class Replication {
         sendAsyncRequest("GET", sessionPath, null, new RemoteRequestCompletionBlock() {
 
             @Override
-            public void onCompletion(Object result, Throwable e) {
+            public void onCompletion(Object result, Throwable error) {
 
+                try {
+                    if (error != null) {
+                        // If not at /db/_session, try CouchDB location /_session
+                        if (error instanceof HttpResponseException &&
+                                ((HttpResponseException) error).getStatusCode() == 404 &&
+                                sessionPath.equalsIgnoreCase("/_session")) {
 
-                if (e instanceof HttpResponseException &&
-                        ((HttpResponseException) e).getStatusCode() == 404 &&
-                        sessionPath.equalsIgnoreCase("/_session")) {
+                            checkSessionAtPath("_session");
+                            return;
+                        }
+                        Log.e(Database.TAG, this + ": Session check failed", error);
+                        setError(error);
 
-                    checkSessionAtPath("_session");
-                    return;
-                } else {
-                    Map<String, Object> response = (Map<String, Object>) result;
-                    Map<String, Object> userCtx = (Map<String, Object>) response.get("userCtx");
-                    String username = (String) userCtx.get("name");
-                    if (username != null && username.length() > 0) {
-                        Log.d(Database.TAG, String.format("%s Active session, logged in as %s", this, username));
-                        fetchRemoteCheckpointDoc();
                     } else {
-                        Log.d(Database.TAG, String.format("%s No active session, going to login", this));
-                        login();
+                        Map<String, Object> response = (Map<String, Object>) result;
+                        Map<String, Object> userCtx = (Map<String, Object>) response.get("userCtx");
+                        String username = (String) userCtx.get("name");
+                        if (username != null && username.length() > 0) {
+                            Log.d(Database.TAG, String.format("%s Active session, logged in as %s", this, username));
+                            fetchRemoteCheckpointDoc();
+                        } else {
+                            Log.d(Database.TAG, String.format("%s No active session, going to login", this));
+                            login();
+                        }
                     }
 
+                } finally {
+                    asyncTaskFinished(1);
                 }
-                asyncTaskFinished(1);
             }
 
         });
@@ -642,11 +676,13 @@ public abstract class Replication {
         running = false;
         this.completedChangesCount = this.changesCount = 0;
 
-        saveLastSequence();
         notifyChangeListeners();
 
+        saveLastSequence();
+
         batcher = null;
-        db = null;
+
+        clearDbRef();  // db no longer tracks me so it won't notify me when it closes; clear ref now
     }
 
     @InterfaceAudience.Private
@@ -670,20 +706,24 @@ public abstract class Replication {
         final String loginPath = getAuthorizer().loginPathForSite(remote);
 
         Log.d(Database.TAG, String.format("%s: Doing login with %s at %s", this, getAuthorizer().getClass(), loginPath));
+
         asyncTaskStarted();
         sendAsyncRequest("POST", loginPath, loginParameters, new RemoteRequestCompletionBlock() {
 
             @Override
             public void onCompletion(Object result, Throwable e) {
-                if (e != null) {
-                    Log.d(Database.TAG, String.format("%s: Login failed for path: %s", this, loginPath));
-                    error = e;
+                try {
+                    if (e != null) {
+                        Log.d(Database.TAG, String.format("%s: Login failed for path: %s", this, loginPath));
+                        setError(e);
+                    }
+                    else {
+                        Log.d(Database.TAG, String.format("%s: Successfully logged in!", this));
+                        fetchRemoteCheckpointDoc();
+                    }
+                } finally {
+                    asyncTaskFinished(1);
                 }
-                else {
-                    Log.d(Database.TAG, String.format("%s: Successfully logged in!", this));
-                    fetchRemoteCheckpointDoc();
-                }
-                asyncTaskFinished(1);
             }
 
         });
@@ -695,7 +735,9 @@ public abstract class Replication {
      */
     @InterfaceAudience.Private
     public synchronized void asyncTaskStarted() {
-        ++asyncTaskCount;
+        if (asyncTaskCount++ == 0) {
+            updateActive();
+        }
     }
 
     /**
@@ -706,9 +748,44 @@ public abstract class Replication {
         this.asyncTaskCount -= numTasks;
         assert(asyncTaskCount >= 0);
         if (asyncTaskCount == 0) {
-            if (!continuous) {
-                stopped();
+            updateActive();
+        }
+    }
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public void updateActive() {
+        try {
+            boolean newActive = batcher.count() > 0 || asyncTaskCount > 0;
+            if (active != newActive) {
+                Log.d(Database.TAG, this + " Progress: set active = " + newActive);
+                active = newActive;
+                notifyChangeListeners();
+
+                if (!active) {
+                    if (!continuous) {
+                        stopped();
+                    }
+
+                    // TODO: port this from iOS
+                    /*
+                    else if (_error) // eg, (_revisionsFailed > 0) {
+                    LogTo(Sync, @"%@: Failed to xfer %u revisions; will retry in %g sec",
+                            self, _revisionsFailed, kRetryDelay);
+                    [NSObject cancelPreviousPerformRequestsWithTarget: self
+                    selector: @selector(retryIfReady)
+                    object: nil];
+                    [self performSelector: @selector(retryIfReady)
+                    withObject: nil afterDelay: kRetryDelay];
+
+                     */
+                }
+
             }
+        } catch (Exception e) {
+            Log.e(Database.TAG, "Exception in updateAcive()", e);
         }
     }
 
@@ -717,10 +794,8 @@ public abstract class Replication {
      */
     @InterfaceAudience.Private
     public void addToInbox(RevisionInternal rev) {
-        if (batcher.count() == 0) {
-            active = true;
-        }
         batcher.queueObject(rev);
+        updateActive();
     }
 
     @InterfaceAudience.Private
@@ -847,10 +922,23 @@ public abstract class Replication {
      * This is the _local document ID stored on the remote server to keep track of state.
      * Its ID is based on the local database ID (the private one, to make the result unguessable)
      * and the remote database's URL.
+     *
      * @exclude
      */
     @InterfaceAudience.Private
     public String remoteCheckpointDocID() {
+
+        /*  TODO: enhance to match iOS version
+            NSMutableDictionary* spec = $mdict({@"localUUID", _db.privateUUID},
+                                       {@"remoteURL", _remote.absoluteString},
+                                       {@"push", @(self.isPush)},
+                                       {@"continuous", (self.continuous ? nil : $false)},
+                                       {@"filter", _filterName},
+                                       {@"filterParams", _filterParameters},
+                                     //{@"headers", _requestHeaders}, (removed; see #143)
+                                       {@"docids", _docIDs});
+         */
+
         if (db == null) {
             return null;
         }
@@ -872,43 +960,40 @@ public abstract class Replication {
     @InterfaceAudience.Private
     public void fetchRemoteCheckpointDoc() {
         lastSequenceChanged = false;
-        final String localLastSequence = db.lastSequenceWithRemoteURL(remote, !isPull());
-        if (localLastSequence == null) {
-            maybeCreateRemoteDB();
-            beginReplicating();
-            return;
-        } else {
-            setCreateTarget(false);
-        }
+        String checkpointId = remoteCheckpointDocID();
+        final String localLastSequence = db.lastSequenceWithCheckpointId(checkpointId);
 
         asyncTaskStarted();
-        sendAsyncRequest("GET", "/_local/" + remoteCheckpointDocID(), null, new RemoteRequestCompletionBlock() {
+        sendAsyncRequest("GET", "/_local/" + checkpointId, null, new RemoteRequestCompletionBlock() {
 
             @Override
             public void onCompletion(Object result, Throwable e) {
-                if (e != null && !is404(e)) {
-                    Log.d(Database.TAG, this + " error getting remote checkpoint: " + e);
-                    error = e;
-                } else {
-                    if (e != null && is404(e)) {
-                        Log.d(Database.TAG, this + " 404 error getting remote checkpoint " + remoteCheckpointDocID() + ", calling maybeCreateRemoteDB");
-                        maybeCreateRemoteDB();
-                    }
-                    Map<String, Object> response = (Map<String, Object>) result;
-                    remoteCheckpoint = response;
-                    String remoteLastSequence = null;
-                    if (response != null) {
-                        remoteLastSequence = (String) response.get("lastSequence");
-                    }
-                    if (remoteLastSequence != null && remoteLastSequence.equals(localLastSequence)) {
-                        lastSequence = localLastSequence;
-                        Log.v(Database.TAG, this + ": Replicating from lastSequence=" + lastSequence);
+                try {
+                    if (e != null && !is404(e)) {
+                        Log.d(Database.TAG, this + " error getting remote checkpoint: " + e);
+                        setError(e);
                     } else {
-                        Log.v(Database.TAG, this + ": lastSequence mismatch: I had " + localLastSequence + ", remote had " + remoteLastSequence);
+                        if (e != null && is404(e)) {
+                            Log.d(Database.TAG, this + " 404 error getting remote checkpoint " + remoteCheckpointDocID() + ", calling maybeCreateRemoteDB");
+                            maybeCreateRemoteDB();
+                        }
+                        Map<String, Object> response = (Map<String, Object>) result;
+                        remoteCheckpoint = response;
+                        String remoteLastSequence = null;
+                        if (response != null) {
+                            remoteLastSequence = (String) response.get("lastSequence");
+                        }
+                        if (remoteLastSequence != null && remoteLastSequence.equals(localLastSequence)) {
+                            lastSequence = localLastSequence;
+                            Log.v(Database.TAG, this + ": Replicating from lastSequence=" + lastSequence);
+                        } else {
+                            Log.v(Database.TAG, this + ": lastSequence mismatch: I had " + localLastSequence + ", remote had " + remoteLastSequence);
+                        }
+                        beginReplicating();
                     }
-                    beginReplicating();
+                } finally {
+                    asyncTaskFinished(1);
                 }
-                asyncTaskFinished(1);
             }
 
         });
@@ -963,7 +1048,7 @@ public abstract class Replication {
             }
 
         });
-        db.setLastSequence(lastSequence, remote, !isPull());
+        db.setLastSequence(lastSequence, remoteCheckpointDocID, !isPull());
     }
 
     @InterfaceAudience.Private
@@ -972,9 +1057,15 @@ public abstract class Replication {
             return false;
         }
         online = false;
-        // TODO: [self stopRemoteRequests]; - remoteRequestExecutor.shutdown(); or remoteRequestExecutor.shutdownNow();
+        stopRemoteRequests();
         updateProgress();
         return true;
+    }
+
+    @InterfaceAudience.Private
+    private void stopRemoteRequests() {
+        List<Runnable> inProgress = remoteRequestExecutor.shutdownNow();
+        Log.d(Database.TAG, this + " stopped " + inProgress.size() + " remote requests in progress");
     }
 
     @InterfaceAudience.Private
@@ -990,6 +1081,22 @@ public abstract class Replication {
                 status = ReplicationStatus.REPLICATION_IDLE;
             }
         }
+    }
+
+    @InterfaceAudience.Private
+    protected void setError(Throwable throwable) {
+        // TODO
+        /*
+        if (error.code == NSURLErrorCancelled && $equal(error.domain, NSURLErrorDomain))
+            return;
+         */
+
+        if (throwable != error) {
+            Log.e(Database.TAG, this + " Progress: set error = " + throwable);
+            error = throwable;
+            notifyChangeListeners();
+        }
+
     }
 
 

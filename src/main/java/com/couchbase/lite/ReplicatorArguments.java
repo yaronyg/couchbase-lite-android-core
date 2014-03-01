@@ -58,7 +58,12 @@ public class ReplicatorArguments {
             throw new CouchbaseLiteException("source and target are both null", new Status(Status.BAD_REQUEST));
         }
 
-        push = manager.getExistingDatabase(getSource()) != null;
+        if (Manager.isValidDatabaseName(getSource()) == false && Manager.isValidDatabaseName(getTarget()) == false) {
+            throw new CouchbaseLiteException("source and target are both not valid local database names, we don't support having CouchBase Lite act as the middle man between replications of two database it doesn't own.",
+                    new Status(Status.BAD_REQUEST));
+        }
+
+        push =  Manager.isValidDatabaseName(getSource());
 
         filter = (String)properties.get(filterFieldName);
 
