@@ -581,7 +581,7 @@ public class Router implements Database.ChangeListener {
         }
 
         Boolean cancelBoolean = (Boolean)body.get("cancel");
-        boolean cancel = (cancelBoolean != null && cancelBoolean.booleanValue());
+        boolean cancel = (cancelBoolean != null && cancelBoolean);
 
         if(!cancel) {
             replicator.start();

@@ -5,6 +5,7 @@ import com.couchbase.lite.util.Log;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -21,7 +22,7 @@ public class Batcher<T> {
     private int capacity;
     private int delay;
     private int scheduledDelay;
-    private List<T> inbox;
+    private LinkedHashSet<T> inbox;
     private BatchProcessor<T> processor;
     private boolean scheduled = false;
     private long lastProcessedTime;
@@ -65,16 +66,18 @@ public class Batcher<T> {
             return;
         }
         if (inbox == null) {
-            inbox = new ArrayList<T>();
+            inbox = new LinkedHashSet<T>();
         }
 
         Log.d(Database.TAG, "inbox size before adding objects: " + inbox.size());
+
         inbox.addAll(objects);
         Log.d(Database.TAG, objects.size() + " objects added to inbox.  inbox size: " + inbox.size());
 
         if (inbox.size() < capacity) {
             // Schedule the processing. To improve latency, if we haven't processed anything
             // in at least our delay time, rush these object(s) through ASAP:
+            Log.d(Database.TAG, "inbox.size() < capacity, schedule processing");
             int delayToUse = delay;
             long delta = (System.currentTimeMillis() - lastProcessedTime);
             if (delta >= delay) {
@@ -127,6 +130,7 @@ public class Batcher<T> {
      * Empties the queue without processing any of the objects in it.
      */
     public void clear() {
+        Log.d(Database.TAG, this + ": clear() called, setting inbox to null");
         unschedule();
         inbox = null;
     }
@@ -142,30 +146,37 @@ public class Batcher<T> {
 
     private void processNow() {
 
+        Log.d(Database.TAG, this + ": processNow() called");
+
         scheduled = false;
         List<T> toProcess = new ArrayList<T>();
 
         synchronized (this) {
             if (inbox == null || inbox.size() == 0) {
-                Log.d(Database.TAG, "processNow() called, but inbox is empty");
+                Log.d(Database.TAG, this + ": processNow() called, but inbox is empty");
                 return;
             } else if (inbox.size() <= capacity) {
-                Log.d(Database.TAG, "processNow() called, inbox size: " + inbox.size());
-                Log.d(Database.TAG, "inbox.size() <= capacity, adding " + inbox.size() + " items to toProcess array");
+                Log.d(Database.TAG, this + ": processNow() called, inbox size: " + inbox.size());
+                Log.d(Database.TAG, this + ": inbox.size() <= capacity, adding " + inbox.size() + " items to toProcess array");
                 toProcess.addAll(inbox);
                 inbox = null;
             } else {
-                Log.d(Database.TAG, "processNow() called, inbox size: " + inbox.size());
-                for (int i=0; i<capacity; i++) {
-                    T item = inbox.get(i);
+                Log.d(Database.TAG, this + ": processNow() called, inbox size: " + inbox.size());
+                int i = 0;
+                for (T item: inbox) {
                     toProcess.add(item);
+                    i += 1;
+                    if (i >= capacity) {
+                        break;
+                    }
                 }
 
                 for (T item : toProcess) {
+                    Log.d(Database.TAG, this + ": processNow() removing " + item + " from inbox");
                     inbox.remove(item);
                 }
 
-                Log.d(Database.TAG, "inbox.size() > capacity, moving " + toProcess.size() + " items from inbox -> toProcess array");
+                Log.d(Database.TAG, this + ": inbox.size() > capacity, moving " + toProcess.size() + " items from inbox -> toProcess array");
 
                 // There are more objects left, so schedule them Real Soon:
                 scheduleWithDelay(0);
@@ -174,10 +185,10 @@ public class Batcher<T> {
 
         }
         if(toProcess != null && toProcess.size() > 0) {
-            Log.d(Database.TAG, "invoking processor with " + toProcess.size() + " items ");
+            Log.d(Database.TAG, this + ": invoking processor with " + toProcess.size() + " items ");
             processor.process(toProcess);
         } else {
-            Log.d(Database.TAG, "nothing to process");
+            Log.d(Database.TAG, this + ": nothing to process");
         }
         lastProcessedTime = System.currentTimeMillis();
 
@@ -199,7 +210,7 @@ public class Batcher<T> {
     }
 
     private void unschedule() {
-        Log.d(Database.TAG, "unschedule called");
+        Log.d(Database.TAG, this + ": unschedule() called");
         scheduled = false;
         if(flushFuture != null) {
             boolean didCancel = flushFuture.cancel(false);
