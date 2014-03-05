@@ -1000,25 +1000,31 @@ public abstract class Replication {
                     if (e != null && !is404(e)) {
                         Log.d(Database.TAG, this + " error getting remote checkpoint: " + e);
                         setError(e);
-                    } else {
-                        if (e != null && is404(e)) {
-                            Log.d(Database.TAG, this + " 404 error getting remote checkpoint " + remoteCheckpointDocID() + ", calling maybeCreateRemoteDB");
-                            maybeCreateRemoteDB();
-                        }
-                        Map<String, Object> response = (Map<String, Object>) result;
-                        remoteCheckpoint = response;
-                        String remoteLastSequence = null;
-                        if (response != null) {
-                            remoteLastSequence = (String) response.get("lastSequence");
-                        }
-                        if (remoteLastSequence != null && remoteLastSequence.equals(localLastSequence)) {
-                            lastSequence = localLastSequence;
-                            Log.v(Database.TAG, this + ": Replicating from lastSequence=" + lastSequence);
-                        } else {
-                            Log.v(Database.TAG, this + ": lastSequence mismatch: I had " + localLastSequence + ", remote had " + remoteLastSequence);
-                        }
-                        beginReplicating();
+                        return;
                     }
+
+                    if (e != null && is404(e)) {
+                        Log.d(Database.TAG, this + " 404 error getting remote checkpoint " + remoteCheckpointDocID()
+                                + ", calling maybeCreateRemoteDB");
+                        maybeCreateRemoteDB();
+                        //return;
+                    }
+
+                    // If we got here then the target exists
+                    setCreateTarget(false);
+                    Map<String, Object> response = (Map<String, Object>) result;
+                    remoteCheckpoint = response;
+                    String remoteLastSequence = null;
+                    if (response != null) {
+                        remoteLastSequence = (String) response.get("lastSequence");
+                    }
+                    if (remoteLastSequence != null && remoteLastSequence.equals(localLastSequence)) {
+                        lastSequence = localLastSequence;
+                        Log.v(Database.TAG, this + ": Replicating from lastSequence=" + lastSequence);
+                    } else {
+                        Log.v(Database.TAG, this + ": lastSequence mismatch: I had " + localLastSequence + ", remote had " + remoteLastSequence);
+                    }
+                    beginReplicating();
                 } finally {
                     Log.d(Database.TAG, this + "|" + Thread.currentThread() + ": fetchRemoteCheckpointDoc() calling asyncTaskFinished()");
                     asyncTaskFinished(1);
