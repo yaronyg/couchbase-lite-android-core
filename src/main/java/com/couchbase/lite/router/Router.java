@@ -78,6 +78,14 @@ public class Router implements Database.ChangeListener {
         return queries;
     }
 
+    public boolean getBooleanValueFromBody(String paramName, Map<String, Object> bodyDict, boolean defaultVal) {
+        boolean value = defaultVal;
+        if (bodyDict.containsKey(paramName)) {
+            value = Boolean.TRUE.equals(bodyDict.get(paramName));
+        }
+        return value;
+    }
+
     public String getQuery(String param) {
         Map<String,String> queries = getQueries();
         if(queries != null) {
@@ -843,19 +851,9 @@ public class Router implements Database.ChangeListener {
         }
         List<Map<String,Object>> docs = (List<Map<String, Object>>) bodyDict.get("docs");
 
-        boolean allObj = false;
-        if(getQuery("all_or_nothing") == null || (getQuery("all_or_nothing") != null && (new Boolean(getQuery("all_or_nothing"))))) {
-        	allObj = true;
-        }
-        //   allowConflict If false, an error status 409 will be returned if the insertion would create a conflict, i.e. if the previous revision already has a child.
-        boolean allOrNothing = (allObj && allObj != false);
-        boolean new_edits =
-                bodyDict.containsKey("new_edits") ?
-                        (Boolean) bodyDict.get("new_edits") :
-                        getQuery("new_edits") != null ?
-                                new Boolean(getQuery("new_edits")) :
-                                true;
-        boolean noNewEdits = !new_edits;
+        boolean noNewEdits = getBooleanValueFromBody("new_edits", bodyDict, true) == false;
+        boolean allOrNothing = getBooleanValueFromBody("all_or_nothing", bodyDict, false);
+
         boolean ok = false;
         db.beginTransaction();
         List<Map<String,Object>> results = new ArrayList<Map<String,Object>>();
@@ -863,7 +861,7 @@ public class Router implements Database.ChangeListener {
             for (Map<String, Object> doc : docs) {
                 String docID = (String) doc.get("_id");
                 RevisionInternal rev = null;
-                Status status = new Status(Status.BAD_REQUEST);
+                Status status = new Status(Status.OK);
                 Body docBody = new Body(doc);
                 if (noNewEdits) {
                     rev = new RevisionInternal(docBody, db);
@@ -872,7 +870,6 @@ public class Router implements Database.ChangeListener {
                     } else {
                         List<String> history = Database.parseCouchDBRevisionHistory(doc);
                         db.forceInsert(rev, history, null);
-                        status = new Status(Status.OK);
                     }
                 } else {
                     Status outStatus = new Status();
@@ -907,7 +904,7 @@ public class Router implements Database.ChangeListener {
             Log.w(Database.TAG, String.format("%s finished inserting %d revisions in bulk", this, docs.size()));
             ok = true;
         } catch (Exception e) {
-            Log.w(Database.TAG, String.format("%s: Exception inserting revisions in bulk", this), e);
+            Log.e(Database.TAG, String.format("%s: Exception inserting revisions in bulk", this), e);
         } finally {
             db.endTransaction(ok);
         }
