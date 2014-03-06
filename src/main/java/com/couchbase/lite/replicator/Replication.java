@@ -1007,11 +1007,8 @@ public abstract class Replication {
                         Log.d(Database.TAG, this + " 404 error getting remote checkpoint " + remoteCheckpointDocID()
                                 + ", calling maybeCreateRemoteDB");
                         maybeCreateRemoteDB();
-                        //return;
                     }
 
-                    // If we got here then the target exists
-                    setCreateTarget(false);
                     Map<String, Object> response = (Map<String, Object>) result;
                     remoteCheckpoint = response;
                     String remoteLastSequence = null;
