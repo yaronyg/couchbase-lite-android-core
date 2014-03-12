@@ -53,8 +53,6 @@ import java.util.concurrent.ScheduledExecutorService;
  */
 public final class Database {
 
-    private static final int MAX_DOC_CACHE_SIZE = 50;
-
     // Default value for maxRevTreeDepth, the max rev depth to preserve in a prune operation
     private static final int DEFAULT_MAX_REVS = Integer.MAX_VALUE;
 
@@ -88,7 +86,7 @@ public final class Database {
     private BlobStore attachments;
     private Manager manager;
     final private List<ChangeListener> changeListeners;
-    private LruCache<String, Document> docCache;
+    private Cache<String, Document> docCache;
     private List<DocumentChange> changesToNotify;
     private boolean postingChangeNotifications;
 
@@ -203,7 +201,7 @@ public final class Database {
         this.name = FileDirUtils.getDatabaseNameFromPath(path);
         this.manager = manager;
         this.changeListeners = Collections.synchronizedList(new ArrayList<ChangeListener>());
-        this.docCache = new LruCache<String, Document>(MAX_DOC_CACHE_SIZE);
+        this.docCache = new Cache<String, Document>();
         this.startTime = System.currentTimeMillis();
         this.changesToNotify = new ArrayList<DocumentChange>();
         this.activeReplicators = Collections.synchronizedSet(new HashSet<Replication>());
@@ -768,7 +766,7 @@ public final class Database {
      */
     @InterfaceAudience.Private
     protected void clearDocumentCache() {
-        docCache.evictAll();
+        docCache.clear();
     }
 
     /**
@@ -2841,9 +2839,12 @@ public final class Database {
     public static List<String> parseCouchDBRevisionHistory(Map<String,Object> docProperties) {
         Map<String,Object> revisions = (Map<String,Object>)docProperties.get("_revisions");
         if(revisions == null) {
-            return null;
+            return new ArrayList<String>();
         }
         List<String> revIDs = (List<String>)revisions.get("ids");
+        if (revIDs == null || revIDs.isEmpty()) {
+            return new ArrayList<String>();
+        }
         Integer start = (Integer)revisions.get("start");
         if(start != null) {
             for(int i=0; i < revIDs.size(); i++) {
@@ -2906,17 +2907,17 @@ public final class Database {
                 outgoingChanges.addAll(changesToNotify);
                 changesToNotify.clear();
 
-
+                // TODO: change this to match iOS and call cachedDocumentWithID
                 /*
                 BOOL external = NO;
-    for (CBLDatabaseChange* change in changes) {
-        // Notify the corresponding instantiated CBLDocument object (if any):
-        [[self _cachedDocumentWithID: change.documentID] revisionAdded: change];
-        if (change.source != nil)
-            external = YES;
-    }
+                for (CBLDatabaseChange* change in changes) {
+                    // Notify the corresponding instantiated CBLDocument object (if any):
+                    [[self _cachedDocumentWithID: change.documentID] revisionAdded: change];
+                    if (change.source != nil)
+                        external = YES;
+                }
+                */
 
-                 */
                 boolean isExternal = false;
                 for (DocumentChange change: outgoingChanges) {
                     Document document = getDocument(change.getDocumentId());
@@ -3639,6 +3640,7 @@ public final class Database {
      */
     @InterfaceAudience.Private
     public boolean setLastSequence(String lastSequence, String checkpointId, boolean push) {
+        Log.d(Database.TAG, this + " setLastSequence() called with lastSequence: " + lastSequence + " checkpointId: " + checkpointId);
         ContentValues values = new ContentValues();
         values.put("remote", checkpointId);
         values.put("push", push);
