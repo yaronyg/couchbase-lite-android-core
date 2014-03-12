@@ -1,47 +1,24 @@
 package com.couchbase.lite.replicator;
 
-import com.couchbase.lite.AsyncTask;
-import com.couchbase.lite.CouchbaseLiteException;
-import com.couchbase.lite.Database;
-import com.couchbase.lite.Manager;
-import com.couchbase.lite.Misc;
-import com.couchbase.lite.RevisionList;
-import com.couchbase.lite.Status;
+import com.couchbase.lite.*;
 import com.couchbase.lite.auth.Authorizer;
 import com.couchbase.lite.auth.FacebookAuthorizer;
 import com.couchbase.lite.auth.PersonaAuthorizer;
-import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.internal.InterfaceAudience;
-import com.couchbase.lite.support.BatchProcessor;
-import com.couchbase.lite.support.Batcher;
-import com.couchbase.lite.support.CouchbaseLiteHttpClientFactory;
-import com.couchbase.lite.support.RemoteMultipartDownloaderRequest;
-import com.couchbase.lite.support.RemoteMultipartRequest;
-import com.couchbase.lite.support.RemoteRequest;
-import com.couchbase.lite.support.RemoteRequestCompletionBlock;
-import com.couchbase.lite.support.HttpClientFactory;
+import com.couchbase.lite.internal.RevisionInternal;
+import com.couchbase.lite.support.*;
+import com.couchbase.lite.util.Log;
 import com.couchbase.lite.util.TextUtils;
 import com.couchbase.lite.util.URIUtils;
-import com.couchbase.lite.util.Log;
-
 import org.apache.http.client.HttpResponseException;
 import org.apache.http.entity.mime.MultipartEntity;
 
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.security.Principal;
+import java.util.*;
+import java.util.concurrent.*;
 
 /**
  * A Couchbase Lite pull or push Replication between a local and a remote Database.
