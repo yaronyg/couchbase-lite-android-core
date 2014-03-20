@@ -45,13 +45,13 @@ public class FileDirUtils {
     }
 
     public static String getDatabaseNameFromPath(String path) {
-        int lastSlashPos = path.lastIndexOf("/");
-        int extensionPos = path.lastIndexOf(".");
-        if(lastSlashPos < 0 || extensionPos < 0 || extensionPos < lastSlashPos) {
+        String fileName = new File(path).getName();
+        int extensionPos = fileName.lastIndexOf(".");
+        if(extensionPos < 0) {
             Log.e(Database.TAG, "Unable to determine database name from path");
             return null;
         }
-        return path.substring(lastSlashPos + 1, extensionPos);
+        return fileName.substring(0, extensionPos);
     }
 
     public static void copyFile(File sourceFile, File destFile) throws IOException {

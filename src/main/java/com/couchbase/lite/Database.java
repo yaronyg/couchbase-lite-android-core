@@ -29,22 +29,13 @@ import com.couchbase.lite.support.Base64;
 import com.couchbase.lite.support.FileDirUtils;
 import com.couchbase.lite.support.HttpClientFactory;
 import com.couchbase.lite.util.Log;
-import com.couchbase.lite.util.LruCache;
 import com.couchbase.lite.util.TextUtils;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Array;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -196,7 +187,7 @@ public final class Database {
      */
     @InterfaceAudience.Private
     public Database(String path, Manager manager) {
-        assert(path.startsWith("/")); //path must be absolute
+        assert(new File(path).isAbsolute()); //path must be absolute
         this.path = path;
         this.name = FileDirUtils.getDatabaseNameFromPath(path);
         this.manager = manager;

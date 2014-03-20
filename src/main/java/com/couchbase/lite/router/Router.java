@@ -215,6 +215,11 @@ public class Router implements Database.ChangeListener {
 
     public String getMultipartRequestType() {
         String accept = connection.getRequestProperty("Accept");
+
+        if (accept == null) {
+            return null;
+        }
+
         if(accept.startsWith("multipart/")) {
             return accept;
         }
@@ -271,7 +276,6 @@ public class Router implements Database.ChangeListener {
     }
 
     public void start() {
-
         if ((requestAuthorization != null) && (requestAuthorization.Authorize(manager, connection) == false)) {
             sendResponse();
             return;
@@ -421,10 +425,8 @@ public class Router implements Database.ChangeListener {
         // Send myself a message based on the components:
         Status status = null;
         try {
-
             Method m = Router.class.getMethod(message, Database.class, String.class, String.class);
             status = (Status)m.invoke(this, db, docID, attachmentName);
-
         } catch (NoSuchMethodException msme) {
             try {
                 String errorMessage = "Router unable to route request to " + message;
