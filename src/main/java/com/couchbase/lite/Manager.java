@@ -63,6 +63,7 @@ public final class Manager {
     private List<Replication> replications;
     private ScheduledExecutorService workExecutor;
     private HttpClientFactory defaultHttpClientFactory;
+    private Context context;
 
     /**
      * @exclude
@@ -90,11 +91,11 @@ public final class Manager {
      * @throws java.lang.SecurityException - Runtime exception that can be thrown by File.mkdirs()
      */
     @InterfaceAudience.Public
-    public Manager(File directoryFile, ManagerOptions options) throws IOException {
+    public Manager(Context context, ManagerOptions options) throws IOException {
 
         Log.v(Database.TAG, "Starting Manager version: " + VERSION);
-
-        this.directoryFile = directoryFile;
+        this.context = context;
+        this.directoryFile = context.getFilesDir();
         this.options = (options != null) ? options : DEFAULT_OPTIONS;
         this.databases = new HashMap<String, Database>();
         this.replications = new ArrayList<Replication>();
@@ -184,6 +185,7 @@ public final class Manager {
             database.close();
         }
         databases.clear();
+        context.getNetworkReachabilityManager().stopListening();
         Log.i(Database.TAG, "Closed " + this);
     }
 
@@ -540,6 +542,11 @@ public final class Manager {
     @InterfaceAudience.Private
     public ScheduledExecutorService getWorkExecutor() {
         return workExecutor;
+    }
+
+    @InterfaceAudience.Private
+    public Context getContext() {
+        return context;
     }
 
 
