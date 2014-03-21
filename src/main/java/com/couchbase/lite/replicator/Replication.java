@@ -63,6 +63,7 @@ public abstract class Replication implements NetworkReachabilityListener {
     protected static final int PROCESSOR_DELAY = 500;
     protected static final int INBOX_CAPACITY = 100;
     protected static final int RETRY_DELAY = 60;
+    protected static final int EXECUTOR_THREAD_POOL_SIZE = 2;
 
 
     /**
@@ -115,8 +116,8 @@ public abstract class Replication implements NetworkReachabilityListener {
         this.continuous = continuous;
         this.workExecutor = workExecutor;
         this.remote = remote;
-        this.remoteRequestExecutor = Executors.newCachedThreadPool();
-        this.changeListeners = new ArrayList<ChangeListener>();
+        this.remoteRequestExecutor = Executors.newFixedThreadPool(EXECUTOR_THREAD_POOL_SIZE);
+        this.changeListeners = Collections.synchronizedList(new ArrayList<ChangeListener>());
         this.online = true;
         this.requestHeaders = new HashMap<String, Object>();
         this.requests = Collections.synchronizedMap(new HashMap<RemoteRequest, Future>());
@@ -700,9 +701,11 @@ public abstract class Replication implements NetworkReachabilityListener {
     @InterfaceAudience.Private
     private void notifyChangeListeners() {
         updateProgress();
-        for (ChangeListener listener : changeListeners) {
-            ChangeEvent changeEvent = new ChangeEvent(this);
-            listener.changed(changeEvent);
+        synchronized (changeListeners) {
+            for (ChangeListener listener : changeListeners) {
+                ChangeEvent changeEvent = new ChangeEvent(this);
+                listener.changed(changeEvent);
+            }
         }
     }
 
@@ -1274,6 +1277,7 @@ public abstract class Replication implements NetworkReachabilityListener {
     private void refreshRemoteCheckpointDoc() {
         Log.d(Database.TAG, this + ": Refreshing remote checkpoint to get its _rev...");
         savingCheckpoint = true;
+        Log.d(Database.TAG, this + "|" + Thread.currentThread() + ": refreshRemoteCheckpointDoc() calling asyncTaskStarted()");
         asyncTaskStarted();
         sendAsyncRequest("GET", "/_local/" + remoteCheckpointDocID(), null, new RemoteRequestCompletionBlock() {
 
@@ -1294,6 +1298,7 @@ public abstract class Replication implements NetworkReachabilityListener {
                         saveLastSequence();  // try saving again
                     }
                 } finally {
+                    Log.d(Database.TAG, this + "|" + Thread.currentThread() + ": refreshRemoteCheckpointDoc() calling asyncTaskFinished()");
                     asyncTaskFinished(1);
                 }
             }

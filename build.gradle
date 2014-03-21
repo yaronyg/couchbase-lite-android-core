@@ -8,6 +8,7 @@ repositories {
     mavenLocal()
     maven { url "http://thaliartifactory.cloudapp.net/artifactory/libs-snapshot" }
     maven { url "http://thaliartifactory.cloudapp.net/artifactory/libs-release" }
+    maven { url 'http://files.couchbase.com/maven2/' }
     mavenCentral()
 }
 

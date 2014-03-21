@@ -221,14 +221,8 @@ public final class Pusher extends Replication implements Database.ChangeListener
     @InterfaceAudience.Private
     private void stopObserving() {
         if(observing) {
-            try {
-                observing = false;
-                db.removeChangeListener(this);
-            } finally {
-                Log.d(Database.TAG, this + "|" + Thread.currentThread() + ": stopObserving() calling asyncTaskFinished()");
-                asyncTaskFinished(1);
-            }
-
+            observing = false;
+            db.removeChangeListener(this);
         }
     }
 
@@ -320,7 +314,6 @@ public final class Pusher extends Replication implements Database.ChangeListener
                                 continue;
                             }
                             properties = new HashMap<String,Object>(rev.getProperties());
-                            assert properties.get("_revisions") != null;
 
                             // Strip any attachments already known to the target db:
                             if (properties.containsKey("_attachments")) {
@@ -390,6 +383,7 @@ public final class Pusher extends Replication implements Database.ChangeListener
         bulkDocsBody.put("docs", docsToSend);
         bulkDocsBody.put("new_edits", false);
 
+        Log.d(Database.TAG, Pusher.this + "|" + Thread.currentThread() + ": uploadBulkDocs() calling asyncTaskStarted()");
         asyncTaskStarted();
         sendAsyncRequest("POST", "/_bulk_docs", bulkDocsBody, new RemoteRequestCompletionBlock() {
 
@@ -435,7 +429,7 @@ public final class Pusher extends Replication implements Database.ChangeListener
                     setCompletedChangesCount(getCompletedChangesCount() + numDocsToSend);
 
                 } finally {
-                    Log.d(Database.TAG, Pusher.this + "|" + Thread.currentThread() + ": processInbox-after_bulk_docs() calling asyncTaskFinished()");
+                    Log.d(Database.TAG, Pusher.this + "|" + Thread.currentThread() + ": uploadBulkDocs() calling asyncTaskFinished()");
                     asyncTaskFinished(1);
                 }
 
@@ -550,7 +544,6 @@ public final class Pusher extends Replication implements Database.ChangeListener
 
         String path = String.format("/%s?new_edits=false", revision.getDocId());
 
-        // TODO: need to throttle these requests
         Log.d(Database.TAG, "Uploading multipart request.  Revision: " + revision);
         Log.d(Database.TAG, this + "|" + Thread.currentThread() + ": uploadMultipartRevision() calling asyncTaskStarted()");
 
