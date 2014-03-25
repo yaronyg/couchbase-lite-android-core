@@ -530,11 +530,7 @@ public class Router implements Database.ChangeListener {
     /*************************************************************************************************/
 
     public void setResponseLocation(URL url) {
-        // The original code used url.toExternalForm() which ends up returning a URL of the form
-        // cblite:/.... which causes folks like Apache's caching client to have a heart attack and generally
-        // isn't terribly informative. By switching to url.getPath() we are in effect returning a relative
-        // URL and so it is 'automatically' correct.
-        String location = url.getPath();// url.toExternalForm();
+        String location = url.getPath();
         String query = url.getQuery();
         if(query != null) {
             int startOfQuery = location.indexOf(query);

@@ -111,6 +111,7 @@ public final class Database {
         KNOWN_SPECIAL_KEYS.add("_revs_info");
         KNOWN_SPECIAL_KEYS.add("_conflicts");
         KNOWN_SPECIAL_KEYS.add("_deleted_conflicts");
+        KNOWN_SPECIAL_KEYS.add("_local_seq");
     }
 
     /**
