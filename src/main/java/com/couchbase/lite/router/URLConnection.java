@@ -1,16 +1,15 @@
 package com.couchbase.lite.router;
 
-
 import com.couchbase.lite.Database;
 import com.couchbase.lite.internal.Body;
 import com.couchbase.lite.util.Log;
 
-import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSession;  // Needed to implement https://github.com/couchbase/couchbase-lite-java-listener/issues/25
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.ProtocolException;
 import java.net.URL;
-import java.security.Principal;
+import java.security.Principal; // https://github.com/couchbase/couchbase-lite-java-core/issues/39
 import java.util.*;
 import java.util.Map.Entry;
 
@@ -22,8 +21,8 @@ public class URLConnection extends HttpURLConnection {
     private ByteArrayOutputStream os;
     private Body responseBody;
     private boolean chunked = false;
-    private SSLSession sslSession = null;
-    private Principal principal = null;
+    private SSLSession sslSession = null;  // Needed to implement https://github.com/couchbase/couchbase-lite-java-listener/issues/25
+    private Principal principal = null; // https://github.com/couchbase/couchbase-lite-java-core/issues/39
 
     private HashMap<String, List<String>> requestProperties = new HashMap<String, List<String>>();
 
@@ -49,17 +48,17 @@ public class URLConnection extends HttpURLConnection {
 
     @Override
     public void connect() throws IOException {
-        throw new UnsupportedOperationException(unsupportedOperationMessage);
+        throw new UnsupportedOperationException(unsupportedOperationMessage);  // https://github.com/couchbase/couchbase-lite-java-core/issues/50
     }
 
     @Override
     public void disconnect() {
-        throw new UnsupportedOperationException(unsupportedOperationMessage);
+        throw new UnsupportedOperationException(unsupportedOperationMessage); // https://github.com/couchbase/couchbase-lite-java-core/issues/50
     }
 
     @Override
     public boolean usingProxy() {
-        throw new UnsupportedOperationException(unsupportedOperationMessage);
+        throw new UnsupportedOperationException(unsupportedOperationMessage); // https://github.com/couchbase/couchbase-lite-java-core/issues/50
     }
 
     @Override
@@ -150,13 +149,13 @@ public class URLConnection extends HttpURLConnection {
     @Override
     public int getResponseCode() {
         return responseCode;
-    }
+    } // I don't know why this is public
 
-    public void setResponseCode(int responseCode) {
+    public void setResponseCode(int responseCode) { // I don't know why this is public
         this.responseCode = responseCode;
     }
 
-    public void setResponseBody(Body responseBody) {
+    public void setResponseBody(Body responseBody) { // I don't know why this is public
         this.responseBody = responseBody;
     }
 
@@ -198,7 +197,7 @@ public class URLConnection extends HttpURLConnection {
 
         if (!connected) {
             // connect and see if there is cache available.
-            // TODO: This calls CBLURLConnection connect() which doesn't do anything
+            // TODO: This calls CBLURLConnection connect() which doesn't do anything - https://github.com/couchbase/couchbase-lite-java-core/issues/51
             // connect();
         }
         return os = new ByteArrayOutputStream();
@@ -248,12 +247,14 @@ public class URLConnection extends HttpURLConnection {
      * Originally we were going to write this functionality based on HTTPSURLConnection but dealing with the
      * consequences of double inheritance (since we would need to expose both the CBLURLConnection interfaces
      * and the HTTPSURLConnection interfaces) was more trouble than it was worth.
+     * Needed to implement https://github.com/couchbase/couchbase-lite-java-listener/issues/25
      * @return
      */
     public SSLSession getSSLSession() {
         return this.sslSession;
     }
 
+    // Needed to implement https://github.com/couchbase/couchbase-lite-java-listener/issues/25
     public void setSSLSession(SSLSession sslSession) {
         if (this.sslSession != null) {
             throw new IllegalArgumentException("No double setting SSLSession to non-null values.");
@@ -265,12 +266,14 @@ public class URLConnection extends HttpURLConnection {
     /**
      * If there is an authenticated principal associated with this connection then it will be returned here. Otherwise
      * null.
+     * https://github.com/couchbase/couchbase-lite-java-core/issues/39
      * @return
      */
     public Principal getPrincipal() {
         return this.principal;
     }
 
+    // https://github.com/couchbase/couchbase-lite-java-core/issues/39
     public void setPrincipal(Principal principal) {
         this.principal = principal;
     }

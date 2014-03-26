@@ -7,6 +7,7 @@ import java.util.Map;
 /**
  * Parses the arguments in a replication request so they can be seen and processed identically by both the
  * functional and security code.
+ * This entire file exists because of https://github.com/couchbase/couchbase-lite-java-core/issues/43
  */
 public class ReplicatorArguments {
     public static final String sourceFieldName = "source";
@@ -30,17 +31,13 @@ public class ReplicatorArguments {
     private final boolean continuous;
     private final boolean cancel;
     private final boolean push;
-    private final String filter;
+    private final String filterName;
     private final Principal principal;
 
     public ReplicatorArguments(Map<String, Object> properties, Manager manager, Principal principal) throws CouchbaseLiteException {
-        rawProperties = properties;
-        queryParams = (Map<String,Object>)properties.get(queryParamsFieldName);
+        // Start taken from manager.java
         Map<String, Object> sourceMap = parseSourceOrTarget(properties, sourceFieldName);
         Map<String, Object> targetMap = parseSourceOrTarget(properties, targetFieldName);
-        headers = (Map<String, Object>)properties.get("headers");
-        sourceAuth = (Map<String, Object>) sourceMap.get(authFieldName);
-        targetAuth = (Map<String, Object>) targetMap.get(authFieldName);
 
         source = (String)sourceMap.get(urlFieldName);
         target = (String)targetMap.get(urlFieldName);
@@ -54,6 +51,7 @@ public class ReplicatorArguments {
         Boolean cancelBoolean = (Boolean)properties.get(cancelFieldName);
         cancel = (cancelBoolean != null && cancelBoolean);
 
+        // Map the 'source' and 'target' JSON params to a local database and remote URL:
         if(source == null || target == null) {
             throw new CouchbaseLiteException("source and target are both null", new Status(Status.BAD_REQUEST));
         }
@@ -65,8 +63,17 @@ public class ReplicatorArguments {
 
         push =  Manager.isValidDatabaseName(getSource());
 
-        filter = (String)properties.get(filterFieldName);
+        filterName = (String)properties.get(filterFieldName);
+        // End taken from manager.java
 
+        // NOTE: https://github.com/couchbase/couchbase-lite-java-core/issues/42 is implemented by removing
+        // https://github.com/couchbase/couchbase-lite-java-core/blob/master/src/main/java/com/couchbase/lite/Manager.java#L572
+
+        rawProperties = properties;
+        queryParams = (Map<String,Object>)properties.get(queryParamsFieldName);
+        headers = (Map<String, Object>)properties.get("headers");
+        sourceAuth = (Map<String, Object>) sourceMap.get(authFieldName);
+        targetAuth = (Map<String, Object>) targetMap.get(authFieldName);
         this.principal = principal;
     }
 
@@ -117,17 +124,18 @@ public class ReplicatorArguments {
      */
     public boolean getPush() { return push; }
 
-    public String getFilterName() { return filter; }
+    public String getFilterName() { return filterName; }
 
     public Principal getPrincipal() { return principal; }
 
+    // Taken directly from manager.java so we have to constantly check back there to see if anything changed
     private Map<String, Object> parseSourceOrTarget(Map<String,Object> properties, String key) {
         Map<String, Object> result = new HashMap<String, Object>();
 
         Object value = properties.get(key);
 
         if (value instanceof String) {
-            result.put(urlFieldName, (String)value);
+            result.put(urlFieldName, value);
         }
         else if (value instanceof Map) {
             result = (Map<String, Object>) value;

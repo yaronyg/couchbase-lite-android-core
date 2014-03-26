@@ -8,6 +8,7 @@ import java.util.Map;
 /**
  * Certain Authorizers come with CouchBase Lite, this class provides an AuthorizerFactory that can handle requests for
  * any of them.
+ * I introduced this class as a consequence of https://github.com/couchbase/couchbase-lite-java-core/issues/41
  */
 public class BuiltInAuthorizerFactory implements AuthorizerFactory {
     protected static final String facebook = "facebook";

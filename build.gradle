@@ -43,6 +43,7 @@ task uploadArchivesWrapper(dependsOn: createMavenDirectory) << {
     uploadArchives.execute()
 }
 
+// https://github.com/couchbase/couchbase-lite-java-core/issues/33
 def mavenPath() {
     artifactory_local == "true" ?
             'file://' + new File(System.getProperty('user.home'), '.m2/repository').absolutePath :
@@ -60,7 +61,7 @@ uploadArchives {
                 authentication(userName: "${artifactory_user}", password: "${artifactory_password}")
             }
 
-            pom.version = "${System.properties['UPLOAD_VERSION_CBLITE']}"
+            pom.version = "${System.properties['UPLOAD_VERSION_CBLITE']}"  // https://github.com/couchbase/couchbase-lite-java-core/issues/34
             //pom.version = System.getenv("UPLOAD_VERSION_CBLITE")
             pom.groupId = 'com.couchbase.lite'
             pom.artifactId = 'java-core'
@@ -84,8 +85,4 @@ task sourcesJar(type: Jar, dependsOn: classes) {
 
 artifacts {
     archives sourcesJar
-}
-
-task wrapper(type: Wrapper) {
-    gradleVersion = '1.10'
 }

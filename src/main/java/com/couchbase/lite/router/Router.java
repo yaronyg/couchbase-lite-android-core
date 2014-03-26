@@ -40,7 +40,7 @@ public class Router implements Database.ChangeListener {
     private boolean waiting = false;
     private ReplicationFilter changesFilter;
     private boolean longpoll = false;
-    private RequestAuthorization requestAuthorization = null;
+    private RequestAuthorization requestAuthorization = null; // https://github.com/couchbase/couchbase-lite-java-core/issues/44
 
     public static String getVersionString() {
         return Manager.VERSION;
@@ -50,6 +50,7 @@ public class Router implements Database.ChangeListener {
         this(manager, connection, null);
     }
 
+    // https://github.com/couchbase/couchbase-lite-java-core/issues/44
     public Router(Manager manager, URLConnection connection, RequestAuthorization requestAuthorization) {
         this.manager = manager;
         this.connection = connection;
@@ -217,7 +218,7 @@ public class Router implements Database.ChangeListener {
     public String getMultipartRequestType() {
         String accept = connection.getRequestProperty("Accept");
 
-        if (accept == null) {
+        if (accept == null) { // https://github.com/couchbase/couchbase-lite-java-core/issues/98
             return null;
         }
 
@@ -265,6 +266,7 @@ public class Router implements Database.ChangeListener {
         }
     }
 
+    // https://github.com/couchbase/couchbase-lite-java-core/issues/47
     private void SendErrorResponseNoResponseBody(int statusCode) {
         assert statusCode >= 400 && statusCode < 600;
         connection.setResponseCode(statusCode);
@@ -277,6 +279,7 @@ public class Router implements Database.ChangeListener {
     }
 
     public void start() {
+        // https://github.com/couchbase/couchbase-lite-java-core/issues/44
         if ((requestAuthorization != null) && (requestAuthorization.Authorize(manager, connection) == false)) {
             sendResponse();
             return;
@@ -295,14 +298,14 @@ public class Router implements Database.ChangeListener {
         // First interpret the components of the request:
         List<String> path = splitPath(connection.getURL());
         if(path == null) {
-            SendErrorResponseNoResponseBody(Status.BAD_REQUEST);
+            SendErrorResponseNoResponseBody(Status.BAD_REQUEST); // https://github.com/couchbase/couchbase-lite-java-core/issues/47
             return;
         }
 
         int pathLen = path.size();
         if(pathLen > 0) {
             String dbName = path.get(0);
-            if(dbName.startsWith("_") || "favicon.ico".equals(dbName)) {
+            if(dbName.startsWith("_") || "favicon.ico".equals(dbName)) {  // https://github.com/couchbase/couchbase-lite-java-core/issues/45
                 message += dbName;  // special root path, like /_all_dbs
             } else {
                 message += "_Database";
@@ -352,21 +355,21 @@ public class Router implements Database.ChangeListener {
             // Make sure database exists, then interpret doc name:
             Status status = openDB();
             if(!status.isSuccessful()) {
-                SendErrorResponseNoResponseBody(status.getCode());
+                SendErrorResponseNoResponseBody(status.getCode()); // https://github.com/couchbase/couchbase-lite-java-core/issues/47
                 return;
             }
             String name = path.get(1);
             if(!name.startsWith("_")) {
                 // Regular document
                 if(!Database.isValidDocumentId(name)) {
-                    SendErrorResponseNoResponseBody(Status.BAD_REQUEST);
+                    SendErrorResponseNoResponseBody(Status.BAD_REQUEST); // https://github.com/couchbase/couchbase-lite-java-core/issues/47
                     return;
                 }
                 docID = name;
             } else if("_design".equals(name) || "_local".equals(name)) {
                 // "_design/____" and "_local/____" are document names
                 if(pathLen <= 2) {
-                    SendErrorResponseNoResponseBody(Status.NOT_FOUND);
+                    SendErrorResponseNoResponseBody(Status.NOT_FOUND); // https://github.com/couchbase/couchbase-lite-java-core/issues/47
                     return;
                 }
                 docID = name + "/" + path.get(2);
@@ -583,7 +586,7 @@ public class Router implements Database.ChangeListener {
         }
 
         try {
-            replicator = manager.getReplicator(body, connection.getPrincipal());
+            replicator = manager.getReplicator(body, connection.getPrincipal()); // https://github.com/couchbase/couchbase-lite-java-core/issues/40
         } catch (CouchbaseLiteException e) {
             Map<String, Object> result = new HashMap<String, Object>();
             result.put("error", e.toString());
@@ -598,7 +601,7 @@ public class Router implements Database.ChangeListener {
             replicator.start();
             Map<String,Object> result = new HashMap<String,Object>();
             result.put("session_id", replicator.getSessionID());
-            result.put("ok", true);
+            result.put("ok", true); // https://github.com/couchbase/couchbase-lite-java-core/issues/48
             connection.setResponseBody(new Body(result));
         } else {
             // Cancel replication:

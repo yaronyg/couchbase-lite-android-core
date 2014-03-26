@@ -1,7 +1,7 @@
 package com.couchbase.lite.auth;
 
 import com.couchbase.lite.Database;
-import com.couchbase.lite.support.HttpClientFactory;
+import com.couchbase.lite.support.HttpClientFactory;  //https://github.com/couchbase/couchbase-lite-java-core/issues/41
 import com.couchbase.lite.util.Base64;
 import com.couchbase.lite.util.Log;
 
@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+// Extends turned into implements per https://github.com/couchbase/couchbase-lite-java-core/issues/41
 public class PersonaAuthorizer implements Authorizer {
 
     public static final String LOGIN_PARAMETER_ASSERTION = "assertion";
@@ -102,6 +103,7 @@ public class PersonaAuthorizer implements Authorizer {
         return "/_persona";
     }
 
+    // Added per https://github.com/couchbase/couchbase-lite-java-core/issues/41
     @Override
     public HttpClientFactory getHttpClientFactory() {
         return null;

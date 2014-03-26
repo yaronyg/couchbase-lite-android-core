@@ -1,7 +1,7 @@
 package com.couchbase.lite;
 
 import com.couchbase.lite.auth.Authorizer;
-import com.couchbase.lite.auth.AuthorizerFactoryManager;
+import com.couchbase.lite.auth.AuthorizerFactoryManager; // https://github.com/couchbase/couchbase-lite-java-core/issues/41
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.replicator.Puller;
 import com.couchbase.lite.replicator.Pusher;
@@ -15,7 +15,7 @@ import org.codehaus.jackson.map.ObjectMapper;
 import java.io.*;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.security.Principal;
+import java.security.Principal; // https://github.com/couchbase/couchbase-lite-java-core/issues/39
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -458,12 +458,12 @@ public final class Manager {
         }
     }
 
+    // Adding principal argument is for https://github.com/couchbase/couchbase-lite-java-core/issues/40
     /**
      * @exclude
      */
     @InterfaceAudience.Private
     public Replication getReplicator(Map<String,Object> properties, Principal principal) throws CouchbaseLiteException {
-
         // TODO: in the iOS equivalent of this code, there is: {@"doc_ids", _documentIDs}) - write unit test that detects this bug
         // TODO: ditto for "headers"
 
@@ -471,15 +471,17 @@ public final class Manager {
         Replication repl = null;
         URL remote = null;
 
-        ReplicatorArguments replicatorArguments = new ReplicatorArguments(properties, this, principal);
+        ReplicatorArguments replicatorArguments = new ReplicatorArguments(properties, this, principal); //https://github.com/couchbase/couchbase-lite-java-core/issues/43
 
         // The authorizer is set here so that the authorizer can alter values in the arguments, primarily source and target
         // to deal with custom URL schemes, before the rest of the processing occurs.
+        // https://github.com/couchbase/couchbase-lite-java-core/issues/41
         AuthorizerFactoryManager authorizerFactoryManager = options.getAuthorizerFactoryManager();
         authorizer = authorizerFactoryManager == null ? null : options.getAuthorizerFactoryManager().findAuthorizer(replicatorArguments);
 
         Database db;
-        String remoteStr = null;
+        String remoteStr;
+        // https://github.com/couchbase/couchbase-lite-java-core/issues/43
         if (replicatorArguments.getPush()) {
             db = getExistingDatabase(replicatorArguments.getSource());
             remoteStr = replicatorArguments.getTarget();
@@ -506,8 +508,10 @@ public final class Manager {
         }
 
         if(!replicatorArguments.getCancel()) {
+            // https://github.com/couchbase/couchbase-lite-java-core/issues/41
             HttpClientFactory httpClientFactory = authorizer != null && authorizer.getHttpClientFactory() != null ?
                     authorizer.getHttpClientFactory() : getDefaultHttpClientFactory();
+            // https://github.com/couchbase/couchbase-lite-java-core/issues/43
             repl = db.getReplicator(remote, httpClientFactory, replicatorArguments.getPush(), replicatorArguments.getContinuous(), getWorkExecutor());
             if(repl == null) {
                 throw new CouchbaseLiteException("unable to create replicator with remote: " + remote, new Status(Status.INTERNAL_SERVER_ERROR));
@@ -517,29 +521,35 @@ public final class Manager {
                 repl.setAuthorizer(authorizer);
             }
 
+            // https://github.com/couchbase/couchbase-lite-java-core/issues/40
             if (principal != null) {
                 repl.addPrincipal(principal);
 			}
 
+            // https://github.com/couchbase/couchbase-lite-java-core/issues/43
             Map<String, Object> headers = replicatorArguments.getHeaders();
             if (headers != null && !headers.isEmpty()) {
                 repl.setHeaders(headers);
             }
 
+            // https://github.com/couchbase/couchbase-lite-java-core/issues/43
             String filterName = replicatorArguments.getFilterName();
             if(filterName != null) {
                 repl.setFilter(filterName);
+                // https://github.com/couchbase/couchbase-lite-java-core/issues/43
                 Map<String,Object> filterParams = replicatorArguments.getQueryParams();
                 if(filterParams != null) {
                     repl.setFilterParams(filterParams);
                 }
             }
 
+            // https://github.com/couchbase/couchbase-lite-java-core/issues/43
             if(replicatorArguments.getPush()) {
                 ((Pusher)repl).setCreateTarget(replicatorArguments.getCreateTarget());
             }
         } else {
             // Cancel replication:
+            // https://github.com/couchbase/couchbase-lite-java-core/issues/43
             repl = db.getActiveReplicator(remote, replicatorArguments.getPush());
             if(repl == null) {
                 throw new CouchbaseLiteException("unable to lookup replicator with remote: " + remote, new Status(Status.NOT_FOUND));

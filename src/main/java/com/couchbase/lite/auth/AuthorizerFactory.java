@@ -3,6 +3,9 @@ package com.couchbase.lite.auth;
 import com.couchbase.lite.CouchbaseLiteException;
 import com.couchbase.lite.ReplicatorArguments;
 
+/**
+ * https://github.com/couchbase/couchbase-lite-java-core/issues/41
+ */
 public interface AuthorizerFactory {
     /**
      * Examines authMap (which encodes the contents of the auth field in a replication request). If it determines

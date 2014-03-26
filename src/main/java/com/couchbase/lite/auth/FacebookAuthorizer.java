@@ -1,7 +1,7 @@
 package com.couchbase.lite.auth;
 
 import com.couchbase.lite.Database;
-import com.couchbase.lite.support.HttpClientFactory;
+import com.couchbase.lite.support.HttpClientFactory;  //https://github.com/couchbase/couchbase-lite-java-core/issues/41
 import com.couchbase.lite.util.Log;
 
 import java.net.URL;
@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+// Changed to implements from extends per https://github.com/couchbase/couchbase-lite-java-core/issues/41
 public class FacebookAuthorizer implements Authorizer {
 
     public static final String LOGIN_PARAMETER_ACCESS_TOKEN = "access_token";
@@ -49,6 +50,7 @@ public class FacebookAuthorizer implements Authorizer {
     }
 
     @Override
+    // Added per https://github.com/couchbase/couchbase-lite-java-core/issues/41
     public HttpClientFactory getHttpClientFactory() {
         return null;
     }

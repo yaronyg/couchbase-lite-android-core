@@ -16,7 +16,7 @@ import org.apache.http.entity.mime.MultipartEntity;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
-import java.security.Principal;
+import java.security.Principal; // https://github.com/couchbase/couchbase-lite-java-core/issues/40
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -49,7 +49,7 @@ public abstract class Replication implements NetworkReachabilityListener {
     protected HttpClientFactory clientFactory;
     private List<ChangeListener> changeListeners;
     protected List<String> documentIDs;
-    protected ConcurrentHashMap<Principal, Boolean> principals = new ConcurrentHashMap<Principal, Boolean>();
+    protected ConcurrentHashMap<Principal, Boolean> principals = new ConcurrentHashMap<Principal, Boolean>(); // https://github.com/couchbase/couchbase-lite-java-core/issues/40
 
     protected Map<String, Object> filterParams;
     protected ExecutorService remoteRequestExecutor;
@@ -934,6 +934,7 @@ public abstract class Replication implements NetworkReachabilityListener {
         remoteRequestExecutor.execute(request);
     }
 
+    // https://github.com/couchbase/couchbase-lite-java-core/issues/40
     public void addPrincipal(Principal principal) {
         if (principal == null) {
             throw new IllegalArgumentException();
@@ -942,6 +943,7 @@ public abstract class Replication implements NetworkReachabilityListener {
         principals.putIfAbsent(principal, true);
     }
 
+    // https://github.com/couchbase/couchbase-lite-java-core/issues/40
     public boolean removePrincipal(Principal principal) {
         if (principal == null) {
             throw new IllegalArgumentException();
@@ -950,6 +952,7 @@ public abstract class Replication implements NetworkReachabilityListener {
         return principals.remove(principal);
     }
 
+    // https://github.com/couchbase/couchbase-lite-java-core/issues/40
     public Enumeration<Principal> getPrincipals() {
         return principals.keys();
     }
@@ -1038,7 +1041,6 @@ public abstract class Replication implements NetworkReachabilityListener {
                         }
                         beginReplicating();
                     }
-                    beginReplicating();
                 } finally {
                     Log.d(Database.TAG, this + "|" + Thread.currentThread() + ": fetchRemoteCheckpointDoc() calling asyncTaskFinished()");
                     asyncTaskFinished(1);

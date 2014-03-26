@@ -2,6 +2,7 @@ package com.couchbase.lite.router;
 
 import com.couchbase.lite.Manager;
 
+// https://github.com/couchbase/couchbase-lite-java-core/issues/44
 public interface RequestAuthorization {
     /**
      * Called by Router it determines if a request is allowed to proceed or not. If false is

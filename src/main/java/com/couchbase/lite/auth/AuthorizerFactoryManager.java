@@ -10,6 +10,7 @@ import java.util.List;
 /**
  * Walks through the authorizerFactories it has been given in the order they were given trying to find the first
  * one that matches the request params.
+ * https://github.com/couchbase/couchbase-lite-java-core/issues/41
  */
 public class AuthorizerFactoryManager {
     ArrayList<AuthorizerFactory> authorizers = new ArrayList<AuthorizerFactory>();
