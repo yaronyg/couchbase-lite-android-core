@@ -506,6 +506,9 @@ public final class Manager {
         } catch (MalformedURLException e) {
             throw new CouchbaseLiteException("malformed remote url: " + remoteStr, new Status(Status.BAD_REQUEST));
         }
+        if(remote == null) {
+            throw new CouchbaseLiteException("remote URL is null: " + remoteStr, new Status(Status.BAD_REQUEST));
+        }
 
         if(!replicatorArguments.getCancel()) {
             // https://github.com/couchbase/couchbase-lite-java-core/issues/41
