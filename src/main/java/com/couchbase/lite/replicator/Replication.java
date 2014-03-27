@@ -49,7 +49,7 @@ public abstract class Replication implements NetworkReachabilityListener {
     private int changesCount;
     protected boolean online;
     protected HttpClientFactory clientFactory;
-    private List<ChangeListener> changeListeners;
+    private final List<ChangeListener> changeListeners;  // https://github.com/couchbase/couchbase-lite-java-core/issues/128
     protected List<String> documentIDs;
     protected ConcurrentHashMap<Principal, Boolean> principals = new ConcurrentHashMap<Principal, Boolean>(); // https://github.com/couchbase/couchbase-lite-java-core/issues/40
 
@@ -60,7 +60,7 @@ public abstract class Replication implements NetworkReachabilityListener {
     protected Map<String, Object> requestHeaders;
     private int revisionsFailed;
     private ScheduledFuture retryIfReadyFuture;
-    private Map<RemoteRequest, Future> requests;
+    private final Map<RemoteRequest, Future> requests;  // https://github.com/couchbase/couchbase-lite-java-core/issues/128
     private String serverType;
 
     protected static final int PROCESSOR_DELAY = 500;
@@ -608,7 +608,7 @@ public abstract class Replication implements NetworkReachabilityListener {
 
     @InterfaceAudience.Private
     /* package */ void setChangesCount(int total) {
-        assert(total > 0);
+        // assert(total > 0); https://github.com/couchbase/couchbase-lite-java-core/issues/129
         Log.d(Database.TAG, "Updating changesCount count from " + this.changesCount + " -> " + total);
         this.changesCount = total;
         notifyChangeListeners();
