@@ -15,12 +15,33 @@ import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpResponseException;
 import org.apache.http.entity.mime.MultipartEntity;
 
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
-import java.security.Principal; // https://github.com/couchbase/couchbase-lite-java-core/issues/40
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
+import java.security.Principal; // https://github.com/couchbase/couchbase-lite-java-core/issues/40
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Enumeration;
+import java.util.TreeMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A Couchbase Lite pull or push Replication between a local and a remote Database.
@@ -45,11 +66,11 @@ public abstract class Replication implements NetworkReachabilityListener {
     protected String sessionID;
     protected Batcher<RevisionInternal> batcher;
     protected int asyncTaskCount;
-    private int completedChangesCount;
-    private int changesCount;
+    private AtomicInteger completedChangesCount;
+    private AtomicInteger changesCount;
     protected boolean online;
     protected HttpClientFactory clientFactory;
-    private final List<ChangeListener> changeListeners;  // https://github.com/couchbase/couchbase-lite-java-core/issues/128
+    private final List<ChangeListener> changeListeners;
     protected List<String> documentIDs;
     protected ConcurrentHashMap<Principal, Boolean> principals = new ConcurrentHashMap<Principal, Boolean>(); // https://github.com/couchbase/couchbase-lite-java-core/issues/40
 
@@ -60,7 +81,7 @@ public abstract class Replication implements NetworkReachabilityListener {
     protected Map<String, Object> requestHeaders;
     private int revisionsFailed;
     private ScheduledFuture retryIfReadyFuture;
-    private final Map<RemoteRequest, Future> requests;  // https://github.com/couchbase/couchbase-lite-java-core/issues/128
+    private final Map<RemoteRequest, Future> requests;
     private String serverType;
 
     protected static final int PROCESSOR_DELAY = 500;
@@ -124,6 +145,9 @@ public abstract class Replication implements NetworkReachabilityListener {
         this.online = true;
         this.requestHeaders = new HashMap<String, Object>();
         this.requests = Collections.synchronizedMap(new HashMap<RemoteRequest, Future>());
+
+        this.completedChangesCount = new AtomicInteger(0);
+        this.changesCount = new AtomicInteger(0);
 
         if (remote.getQuery() != null && !remote.getQuery().isEmpty()) {
 
@@ -378,7 +402,7 @@ public abstract class Replication implements NetworkReachabilityListener {
      */
     @InterfaceAudience.Public
     public int getCompletedChangesCount() {
-        return completedChangesCount;
+        return completedChangesCount.get();
     }
 
     /**
@@ -386,7 +410,7 @@ public abstract class Replication implements NetworkReachabilityListener {
      */
     @InterfaceAudience.Public
     public int getChangesCount() {
-        return changesCount;
+        return changesCount.get();
     }
 
     /**
@@ -596,23 +620,23 @@ public abstract class Replication implements NetworkReachabilityListener {
         }
     }
 
-
     @InterfaceAudience.Private
-    /* package */ void setCompletedChangesCount(int processed) {
-        assert(processed > 0);
-        Log.d(Database.TAG, "Updating changesCountCompleted count from " + this.completedChangesCount + " -> " + processed);
-        this.completedChangesCount = processed;
+    /* package */ void addToCompletedChangesCount(int delta) {
+        int previousVal = this.completedChangesCount.getAndAdd(delta);
+        Log.d(Database.TAG, "Incrementing completedChangesCount count from " + previousVal + " by adding " + delta + " -> " + this.completedChangesCount.get());
         notifyChangeListeners();
-
     }
 
     @InterfaceAudience.Private
-    /* package */ void setChangesCount(int total) {
-        // assert(total > 0); https://github.com/couchbase/couchbase-lite-java-core/issues/129
-        Log.d(Database.TAG, "Updating changesCount count from " + this.changesCount + " -> " + total);
-        this.changesCount = total;
+    /* package */ void addToChangesCount(int delta) {
+        int previousVal = this.changesCount.getAndAdd(delta);
+        if (changesCount.get() < 0) {
+            Log.w(Database.TAG, "Changes count is negative, this could indicate an error");
+        }
+        Log.d(Database.TAG, "Incrementing changesCount count from " + previousVal + " by adding " + delta + " -> " + this.changesCount.get());
         notifyChangeListeners();
     }
+
 
     /**
      * @exclude
@@ -995,22 +1019,46 @@ public abstract class Replication implements NetworkReachabilityListener {
     @InterfaceAudience.Private
     public String remoteCheckpointDocID() {
 
-        /*  TODO: enhance to match iOS version
-            NSMutableDictionary* spec = $mdict({@"localUUID", _db.privateUUID},
-                                       {@"remoteURL", _remote.absoluteString},
-                                       {@"push", @(self.isPush)},
-                                       {@"continuous", (self.continuous ? nil : $false)},
-                                       {@"filter", _filterName},
-                                       {@"filterParams", _filterParameters},
-                                     //{@"headers", _requestHeaders}, (removed; see #143)
-                                       {@"docids", _docIDs});
-         */
-
         if (db == null) {
             return null;
         }
-        String input = db.privateUUID() + "\n" + remote.toExternalForm() + "\n" + (!isPull() ? "1" : "0");
-        return Misc.TDHexSHA1Digest(input.getBytes());
+
+        // canonicalization: make sure it produces the same checkpoint id regardless of
+        // ordering of filterparams / docids
+        Map<String, Object> filterParamsCanonical = null;
+        if (getFilterParams() != null) {
+            filterParamsCanonical = new TreeMap<String, Object>(getFilterParams());
+        }
+
+        List<String> docIdsSorted = null;
+        if (getDocIds() != null) {
+            docIdsSorted = new ArrayList<String>(getDocIds());
+            Collections.sort(docIdsSorted);
+        }
+
+        // use a treemap rather than a dictionary for purposes of canonicalization
+        Map<String, Object> spec = new TreeMap<String, Object>();
+        spec.put("localUUID", db.privateUUID());
+        spec.put("remoteURL", remote.toExternalForm());
+        spec.put("push", !isPull());
+        spec.put("continuous", isContinuous());
+        if (getFilter() != null) {
+            spec.put("filter", getFilter());
+        }
+        if (filterParamsCanonical != null) {
+            spec.put("filterParams", filterParamsCanonical);
+        }
+        if (docIdsSorted != null) {
+            spec.put("docids", docIdsSorted);
+        }
+
+        byte[] inputBytes = null;
+        try {
+            inputBytes = db.getManager().getObjectMapper().writeValueAsBytes(spec);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        return Misc.TDHexSHA1Digest(inputBytes);
     }
 
     @InterfaceAudience.Private
