@@ -587,6 +587,7 @@ public abstract class Replication implements NetworkReachabilityListener {
     private void clearDbRef() {
         if (savingCheckpoint && lastSequence != null) {
             db.setLastSequence(lastSequence, remoteCheckpointDocID(), !isPull());
+            savingCheckpoint = false; // https://github.com/couchbase/couchbase-lite-java-core/issues/136
             db = null;
         }
     }

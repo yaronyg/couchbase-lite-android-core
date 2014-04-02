@@ -333,12 +333,13 @@ public final class Database {
         }
         File file = new File(path);
         File fileJournal = new File(path + "-journal");
-        File attachmentsFile = new File(getAttachmentStorePath());
 
         boolean deleteStatus = file.delete();
-        deleteStatus &= fileJournal.delete();
+        if (fileJournal.exists()) { // https://github.com/couchbase/couchbase-lite-java-core/issues/134
+            deleteStatus &= fileJournal.delete();
+        }
 
-        attachmentsFile = new File(getAttachmentStorePath());
+        File attachmentsFile = new File(getAttachmentStorePath()); // https://github.com/couchbase/couchbase-lite-java-core/issues/134
 
 
         //recursively delete attachments path
