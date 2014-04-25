@@ -20,23 +20,12 @@ public class AuthorizerFactoryManager {
     }
 
     /**
-     * The code checks to see if there is an auth section.
+     * The code checks to see if an authorizer is needed for the request
      * @param replicatorArguments
      * @return null if there is no authorizer needed otherwise the appropriate authorizer, if any
      * @throws CouchbaseLiteException
      */
     public Authorizer findAuthorizer(ReplicatorArguments replicatorArguments) throws CouchbaseLiteException {
-        // Only the 'foreign' DB should have auth, not the local DB
-        if ((replicatorArguments.getPush() && replicatorArguments.getSourceAuth() != null) ||
-                (replicatorArguments.getPush() == false && replicatorArguments.getTargetAuth() != null)) {
-            throw new CouchbaseLiteException("Auth eleement can only be used for foreign DB, not local DB.", new Status(Status.BAD_REQUEST));
-        }
-
-        // We only trigger off the auth section
-        if (replicatorArguments.getTargetAuth() == null && replicatorArguments.getSourceAuth() == null) {
-            return null;
-        }
-
         for(AuthorizerFactory authorizerFactory : authorizers) {
             Authorizer authorizer = authorizerFactory.getAuthorizer(replicatorArguments);
             if (authorizer != null) {
