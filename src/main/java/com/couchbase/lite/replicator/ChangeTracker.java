@@ -4,9 +4,12 @@ import com.couchbase.lite.CouchbaseLiteException;
 import com.couchbase.lite.Database;
 import com.couchbase.lite.Manager;
 import com.couchbase.lite.Status;
+import com.couchbase.lite.auth.Authenticator;
+import com.couchbase.lite.auth.AuthenticatorImpl;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.util.Log;
 import com.couchbase.lite.util.URIUtils;
+import com.couchbase.lite.util.Utils;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpException;
@@ -21,6 +24,7 @@ import org.apache.http.auth.Credentials;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
 import org.apache.http.client.HttpClient;
+import org.apache.http.client.HttpResponseException;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpUriRequest;
@@ -77,9 +81,12 @@ public class ChangeTracker implements Runnable {
     private int heartBeatSeconds;
     private int limit;
 
+    private Authenticator authenticator;
 
     public enum ChangeTrackerMode {
-        OneShot, LongPoll, Continuous
+        OneShot,
+        LongPoll,
+        Continuous  // does not work, do not use it.
     }
 
     public ChangeTracker(URL databaseURL, ChangeTrackerMode mode, boolean includeConflicts,
@@ -195,9 +202,16 @@ public class ChangeTracker implements Runnable {
         try {
             result = new URL(dbURLString);
         } catch(MalformedURLException e) {
-            Log.e(Database.TAG, this + ": Changes feed ULR is malformed", e);
+            Log.e(Log.TAG_CHANGE_TRACKER, this + ": Changes feed ULR is malformed", e);
         }
         return result;
+    }
+
+    /**
+     *  Set Authenticator for BASIC Authentication
+     */
+    public void setAuthenticator(Authenticator authenticator) {
+        this.authenticator = authenticator;
     }
 
     @Override
@@ -210,7 +224,7 @@ public class ChangeTracker implements Runnable {
             // This is a race condition that can be reproduced by calling cbpuller.start() and cbpuller.stop()
             // directly afterwards.  What happens is that by the time the Changetracker thread fires up,
             // the cbpuller has already set this.client to null.  See issue #109
-            Log.w(Database.TAG, this + ": ChangeTracker run() loop aborting because client == null");
+            Log.w(Log.TAG_CHANGE_TRACKER, "%s: ChangeTracker run() loop aborting because client == null", this);
             return;
         }
 
@@ -245,53 +259,55 @@ public class ChangeTracker implements Runnable {
 
             addRequestHeaders(request);
 
-            // if the URL contains user info AND if this a DefaultHttpClient
-            // then preemptively set the auth credentials
-            if (url.getUserInfo() != null) {
-                Log.v(Database.TAG, this + ": url.getUserInfo(): " + url.getUserInfo());
-                if (url.getUserInfo().contains(":") && !url.getUserInfo().trim().equals(":")) {
-                    String[] userInfoSplit = url.getUserInfo().split(":");
-                    final Credentials creds = new UsernamePasswordCredentials(
-                            URIUtils.decode(userInfoSplit[0]), URIUtils.decode(userInfoSplit[1]));
+            // Perform BASIC Authentication if needed
+            boolean isUrlBasedUserInfo = false;
+
+            // If the URL contains user info AND if this a DefaultHttpClient then preemptively set the auth credentials
+            String userInfo = url.getUserInfo();
+            if (userInfo != null) {
+                isUrlBasedUserInfo = true;
+            } else {
+                if (authenticator != null) {
+                    AuthenticatorImpl auth = (AuthenticatorImpl) authenticator;
+                    userInfo = auth.authUserInfo();
+                }
+            }
+
+            if (userInfo != null) {
+                if (userInfo.contains(":") && !userInfo.trim().equals(":")) {
+                    String[] userInfoElements = userInfo.split(":");
+                    String username = isUrlBasedUserInfo ? URIUtils.decode(userInfoElements[0]): userInfoElements[0];
+                    String password = isUrlBasedUserInfo ? URIUtils.decode(userInfoElements[1]): userInfoElements[1];
+                    final Credentials credentials = new UsernamePasswordCredentials(username, password);
+
                     if (httpClient instanceof DefaultHttpClient) {
                         DefaultHttpClient dhc = (DefaultHttpClient) httpClient;
-
                         HttpRequestInterceptor preemptiveAuth = new HttpRequestInterceptor() {
-
                             @Override
-                            public void process(HttpRequest request,
-                                                HttpContext context) throws HttpException,
-                                    IOException {
+                            public void process(HttpRequest request, HttpContext context) throws HttpException, IOException {
                                 AuthState authState = (AuthState) context.getAttribute(ClientContext.TARGET_AUTH_STATE);
-                                CredentialsProvider credsProvider = (CredentialsProvider) context.getAttribute(
-                                        ClientContext.CREDS_PROVIDER);
-                                HttpHost targetHost = (HttpHost) context.getAttribute(ExecutionContext.HTTP_TARGET_HOST);
-
                                 if (authState.getAuthScheme() == null) {
-                                    AuthScope authScope = new AuthScope(targetHost.getHostName(), targetHost.getPort());
                                     authState.setAuthScheme(new BasicScheme());
-                                    authState.setCredentials(creds);
+                                    authState.setCredentials(credentials);
                                 }
                             }
                         };
-
                         dhc.addRequestInterceptor(preemptiveAuth, 0);
                     }
                 } else {
-                    Log.w(Database.TAG, this + ": ChangeTracker Unable to parse user info, not setting credentials");
+                    Log.w(Log.TAG_CHANGE_TRACKER, "RemoteRequest Unable to parse user info, not setting credentials");
                 }
             }
 
             try {
                 String maskedRemoteWithoutCredentials = getChangesFeedURL().toString();
                 maskedRemoteWithoutCredentials = maskedRemoteWithoutCredentials.replaceAll("://.*:.*@", "://---:---@");
-                Log.v(Database.TAG, this + ": Making request to " + maskedRemoteWithoutCredentials);
+                Log.v(Log.TAG_CHANGE_TRACKER, "%s: Making request to %s", this, maskedRemoteWithoutCredentials);
                 HttpResponse response = httpClient.execute(request);
                 StatusLine status = response.getStatusLine();
-                if (status.getStatusCode() >= 300) {
-                    Log.e(Database.TAG, this + ": Change tracker got error " + Integer.toString(status.getStatusCode()));
-                    String msg = String.format(status.toString());
-                    this.error = new CouchbaseLiteException(msg, new Status(status.getStatusCode()));
+                if (status.getStatusCode() >= 300 && !Utils.isTransientError(status)) {
+                    Log.e(Log.TAG_CHANGE_TRACKER, "%s: Change tracker got error %d", this, status.getStatusCode());
+                    this.error = new HttpResponseException(status.getStatusCode(), status.getReasonPhrase());
                     stop();
                 }
                 HttpEntity entity = response.getEntity();
@@ -303,11 +319,11 @@ public class ChangeTracker implements Runnable {
                             Map<String, Object> fullBody = Manager.getObjectMapper().readValue(input, Map.class);
                             boolean responseOK = receivedPollResponse(fullBody);
                             if (mode == ChangeTrackerMode.LongPoll && responseOK) {
-                                Log.v(Database.TAG, this + ": Starting new longpoll");
+                                Log.v(Log.TAG_CHANGE_TRACKER, "%s: Starting new longpoll", this);
                                 backoff.resetBackoff();
                                 continue;
                             } else {
-                                Log.w(Database.TAG, this + ": Change tracker calling stop (LongPoll)");
+                                Log.w(Log.TAG_CHANGE_TRACKER, "%s: Change tracker calling stop (LongPoll)", this);
                                 stop();
                             }
                         } else {  // one-shot replications
@@ -322,12 +338,12 @@ public class ChangeTracker implements Runnable {
                             while (jp.nextToken() == JsonToken.START_OBJECT) {
                                 Map<String, Object> change = (Map) Manager.getObjectMapper().readValue(jp, Map.class);
                                 if (!receivedChange(change)) {
-                                    Log.w(Database.TAG, String.format("Received unparseable change line from server: %s", change));
+                                    Log.w(Log.TAG_CHANGE_TRACKER, "Received unparseable change line from server: %s", change);
                                 }
 
                             }
 
-                            Log.w(Database.TAG, this + ": Change tracker calling stop (OneShot)");
+                            Log.w(Log.TAG_CHANGE_TRACKER, "%s: Change tracker calling stop (OneShot)", this);
                             stop();
                             break;
 
@@ -349,14 +365,14 @@ public class ChangeTracker implements Runnable {
                     // frequently happens when we're shutting down and have to
                     // close the socket underneath our read.
                 } else {
-                    Log.e(Database.TAG, this + ": Exception in change tracker", e);
+                    Log.e(Log.TAG_CHANGE_TRACKER, this + ": Exception in change tracker", e);
                 }
 
                 backoff.sleepAppropriateAmountOfTime();
 
             }
         }
-        Log.v(Database.TAG, this + ": Change tracker run loop exiting");
+        Log.v(Log.TAG_CHANGE_TRACKER, "%s: Change tracker run loop exiting", this);
     }
 
     public boolean receivedChange(final Map<String,Object> change) {
@@ -386,7 +402,7 @@ public class ChangeTracker implements Runnable {
     }
 
     public void setUpstreamError(String message) {
-        Log.w(Database.TAG, String.format("Server error: %s", message));
+        Log.w(Log.TAG_CHANGE_TRACKER, "Server error: %s", message);
         this.error = new Throwable(message);
     }
 
@@ -400,7 +416,7 @@ public class ChangeTracker implements Runnable {
     }
 
     public void stop() {
-        Log.d(Database.TAG, this + ": Changed tracker asked to stop");
+        Log.d(Log.TAG_CHANGE_TRACKER, "%s: Changed tracker asked to stop", this);
         running = false;
         thread.interrupt();
         if(request != null) {
@@ -411,13 +427,11 @@ public class ChangeTracker implements Runnable {
     }
 
     public void stopped() {
-        Log.d(Database.TAG, this + ": Change tracker in stopped");
+        Log.d(Log.TAG_CHANGE_TRACKER, "%s: Change tracker in stopped", this);
         if (client != null) {
-            Log.d(Database.TAG, this + ": posting stopped");
             client.changeTrackerStopped(ChangeTracker.this);
         }
         client = null;
-        Log.d(Database.TAG, this + ": Change tracker client should be null now");
     }
 
     void setRequestHeaders(Map<String, Object> requestHeaders) {

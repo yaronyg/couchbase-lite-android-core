@@ -1,7 +1,6 @@
 package com.couchbase.lite.auth;
 
 import com.couchbase.lite.Database;
-import com.couchbase.lite.support.HttpClientFactory;  //https://github.com/couchbase/couchbase-lite-java-core/issues/41
 import com.couchbase.lite.util.Base64;
 import com.couchbase.lite.util.Log;
 
@@ -16,8 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-// Extends turned into implements per https://github.com/couchbase/couchbase-lite-java-core/issues/41
-public class PersonaAuthorizer implements Authorizer {
+public class PersonaAuthorizer extends Authorizer {
 
     public static final String LOGIN_PARAMETER_ASSERTION = "assertion";
 
@@ -59,8 +57,8 @@ public class PersonaAuthorizer implements Authorizer {
         exp = (Date) parsedAssertion.get(ASSERTION_FIELD_EXPIRATION);
         Date now = new Date();
         if (exp.before(now)) {
-            Log.w(Database.TAG, String.format("%s assertion for %s expired: %s",
-                    this.getClass(), this.emailAddress, exp));
+            Log.w(Log.TAG_SYNC, "%s assertion for %s expired: %s",
+                    this.getClass(), this.emailAddress, exp);
             return true;
         }
         return false;
@@ -70,8 +68,8 @@ public class PersonaAuthorizer implements Authorizer {
     public String assertionForSite(URL site) {
         String assertion = assertionForEmailAndSite(this.emailAddress, site);
         if (assertion == null) {
-            Log.w(Database.TAG, String.format("%s %s no assertion found for: %s",
-                    this.getClass(), this.emailAddress, site));
+            Log.w(Log.TAG_SYNC, "%s %s no assertion found for: %s",
+                    this.getClass(), this.emailAddress, site);
             return null;
         }
         Map<String, Object> result = parseAssertion(assertion);
@@ -103,12 +101,6 @@ public class PersonaAuthorizer implements Authorizer {
         return "/_persona";
     }
 
-    // Added per https://github.com/couchbase/couchbase-lite-java-core/issues/41
-    @Override
-    public HttpClientFactory getHttpClientFactory() {
-        return null;
-    }
-
     public synchronized static String registerAssertion(String assertion) {
 
         String email, origin;
@@ -125,7 +117,7 @@ public class PersonaAuthorizer implements Authorizer {
             origin = originURL.toExternalForm().toLowerCase();
         } catch (MalformedURLException e) {
             String message = "Error registering assertion: " + assertion;
-            Log.e(Database.TAG, message, e);
+            Log.e(Log.TAG_SYNC, message, e);
             throw new IllegalArgumentException(message, e);
         }
 
@@ -146,7 +138,7 @@ public class PersonaAuthorizer implements Authorizer {
         if (assertions == null) {
             assertions = new HashMap<List<String>, String>();
         }
-        Log.d(Database.TAG, "PersonaAuthorizer registering key: " + key);
+        Log.v(Log.TAG_SYNC, "PersonaAuthorizer registering key: %s", key);
         assertions.put(key, assertion);
 
         return email;
@@ -179,14 +171,13 @@ public class PersonaAuthorizer implements Authorizer {
             result.put(ASSERTION_FIELD_ORIGIN, component3Json.get("aud"));
 
             Long expObject = (Long) component3Json.get("exp");
-            Log.d(Database.TAG, "PersonaAuthorizer exp: " + expObject + " class: " + expObject.getClass());
             Date expDate = new Date(expObject.longValue());
             result.put(ASSERTION_FIELD_EXPIRATION, expDate);
 
 
         } catch (IOException e) {
             String message = "Error parsing assertion: " + assertion;
-            Log.e(Database.TAG, message, e);
+            Log.e(Log.TAG_SYNC, message, e);
             throw new IllegalArgumentException(message, e);
         }
 
@@ -197,7 +188,7 @@ public class PersonaAuthorizer implements Authorizer {
         List<String> key = new ArrayList<String>();
         key.add(email);
         key.add(site.toExternalForm().toLowerCase());
-        Log.d(Database.TAG, "PersonaAuthorizer looking up key: " + key + " from list of assertions");
+        Log.v(Log.TAG_SYNC, "PersonaAuthorizer looking up key: %s from list of assertions", key);
         return assertions.get(key);
     }
 

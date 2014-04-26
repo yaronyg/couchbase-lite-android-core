@@ -5,6 +5,7 @@ apply plugin: 'eclipse'
 sourceCompatibility = 1.6
 
 repositories {
+	// https://github.com/couchbase/couchbase-lite-java-core/issues/180
     mavenLocal()
     maven { url "http://thaliartifactory.cloudapp.net/artifactory/libs-snapshot" }
     maven { url "http://thaliartifactory.cloudapp.net/artifactory/libs-release" }
@@ -29,14 +30,14 @@ dependencies {
 task createMavenDirectory(type: Exec) {
 
     ext {
-        uploadUser = System.getenv("UPLOAD_USERNAME") + ":" + System.getenv("UPLOAD_PASSWORD")
-        mkcolPath = System.getenv("UPLOAD_MAVEN_REPO_URL") + "com/couchbase/lite/java-core/" + System.getenv("UPLOAD_VERSION_CBLITE") + "/"
+        uploadUser = System.getenv("MAVEN_UPLOAD_USERNAME") + ":" + System.getenv("MAVEN_UPLOAD_PASSWORD")
+        mkcolPath  = System.getenv("MAVEN_UPLOAD_REPO_URL") + "com/couchbase/lite/java-core/" + System.getenv("MAVEN_UPLOAD_VERSION") + "/"
     }
     commandLine "curl", "--user", uploadUser, "-X", "MKCOL", mkcolPath
 }
 
 // this hack is only needed for apache mod_dav based Maven repo's like file.couchbase.com.  otherwise, skip it
-createMavenDirectory.onlyIf { System.getenv("UPLOAD_MAVEN_REPO_URL").contains("files") }
+createMavenDirectory.onlyIf { System.getenv("MAVEN_UPLOAD_REPO_URL").contains("files") }
 
 // first create the directory, then do the upload
 task uploadArchivesWrapper(dependsOn: createMavenDirectory) << {
@@ -54,15 +55,14 @@ def mavenPath() {
 uploadArchives {
     repositories {
         mavenDeployer {
-            //repository(url: System.getenv("UPLOAD_MAVEN_REPO_URL")) {
-            //    authentication(userName: System.getenv("UPLOAD_USERNAME"), password: System.getenv("UPLOAD_PASSWORD"))
-            //}
+			// https://github.com/couchbase/couchbase-lite-java-core/issues/33
             repository(url: mavenPath()) {
                 authentication(userName: "${artifactory_user}", password: "${artifactory_password}")
+            //repository(url: System.getenv("MAVEN_UPLOAD_REPO_URL")) {
+            //    authentication(userName: System.getenv("MAVEN_UPLOAD_USERNAME"), password: System.getenv("MAVEN_UPLOAD_PASSWORD"))
             }
-
             pom.version = "${System.properties['UPLOAD_VERSION_CBLITE']}"  // https://github.com/couchbase/couchbase-lite-java-core/issues/34
-            //pom.version = System.getenv("UPLOAD_VERSION_CBLITE")
+            //pom.version = System.getenv("MAVEN_UPLOAD_VERSION")
             pom.groupId = 'com.couchbase.lite'
             pom.artifactId = 'java-core'
             pom.project {

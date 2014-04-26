@@ -1,6 +1,7 @@
 package com.couchbase.lite;
 
 import com.couchbase.lite.internal.InterfaceAudience;
+import com.couchbase.lite.util.Log;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -195,10 +196,10 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setLimit(int limit) {
+    public Query setLimit(int limit) {
         this.limit = limit;
+        return this;
     }
-
 
     @InterfaceAudience.Public
     public int getSkip() {
@@ -206,8 +207,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setSkip(int skip) {
+    public Query setSkip(int skip) {
         this.skip = skip;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -216,8 +218,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setDescending(boolean descending) {
+    public Query setDescending(boolean descending) {
         this.descending = descending;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -226,8 +229,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setStartKey(Object startKey) {
+    public Query setStartKey(Object startKey) {
         this.startKey = startKey;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -236,8 +240,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setEndKey(Object endKey) {
+    public Query setEndKey(Object endKey) {
         this.endKey = endKey;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -246,8 +251,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setStartKeyDocId(String startKeyDocId) {
+    public Query setStartKeyDocId(String startKeyDocId) {
         this.startKeyDocId = startKeyDocId;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -256,8 +262,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setEndKeyDocId(String endKeyDocId) {
+    public Query setEndKeyDocId(String endKeyDocId) {
         this.endKeyDocId = endKeyDocId;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -266,8 +273,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setIndexUpdateMode(IndexUpdateMode indexUpdateMode) {
+    public Query setIndexUpdateMode(IndexUpdateMode indexUpdateMode) {
         this.indexUpdateMode = indexUpdateMode;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -276,8 +284,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setAllDocsMode(AllDocsMode allDocsMode) {
+    public Query setAllDocsMode(AllDocsMode allDocsMode) {
         this.allDocsMode = allDocsMode;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -286,8 +295,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setKeys(List<Object> keys) {
+    public Query setKeys(List<Object> keys) {
         this.keys = keys;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -296,8 +306,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setMapOnly(boolean mapOnly) {
+    public Query setMapOnly(boolean mapOnly) {
         this.mapOnly = mapOnly;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -306,8 +317,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setGroupLevel(int groupLevel) {
+    public Query setGroupLevel(int groupLevel) {
         this.groupLevel = groupLevel;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -316,8 +328,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setPrefetch(boolean prefetch) {
+    public Query setPrefetch(boolean prefetch) {
         this.prefetch = prefetch;
+        return this;
     }
 
     @InterfaceAudience.Public
@@ -326,8 +339,9 @@ public class Query {
     }
 
     @InterfaceAudience.Public
-    public void setIncludeDeleted(boolean includeDeletedParam) {
+    public Query setIncludeDeleted(boolean includeDeletedParam) {
         allDocsMode = (includeDeletedParam == true) ? AllDocsMode.INCLUDE_DELETED : AllDocsMode.ALL_DOCS;
+        return this;
     }
 
     /**
@@ -397,11 +411,11 @@ public class Query {
                     onComplete.completed(enumerator, null);
 
                 } catch (Throwable t) {
+                    Log.e(Log.TAG_QUERY, "Exception caught in runAsyncInternal", t);
                     onComplete.completed(null, t);
                 }
             }
         });
-
     }
 
     /**
@@ -430,6 +444,8 @@ public class Query {
         queryOptions.setInclusiveEnd(true);
         queryOptions.setStale(getIndexUpdateMode());
         queryOptions.setAllDocsMode(getAllDocsMode());
+        queryOptions.setStartKeyDocId(getStartKeyDocId());
+        queryOptions.setEndKeyDocId(getEndKeyDocId());
         return queryOptions;
     }
 
@@ -441,8 +457,4 @@ public class Query {
             view.delete();
         }
     }
-
-
-
-
 }

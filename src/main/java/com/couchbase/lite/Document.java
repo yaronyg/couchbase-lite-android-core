@@ -71,7 +71,11 @@ public final class Document {
      */
     @InterfaceAudience.Public
     public boolean isDeleted() {
-        return getCurrentRevision().isDeletion();
+        try {
+            return getCurrentRevision() == null && getLeafRevisions().size() > 0;
+        } catch (CouchbaseLiteException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
@@ -227,7 +231,10 @@ public final class Document {
      */
     @InterfaceAudience.Public
     public Object getProperty(String key) {
-        return getCurrentRevision().getProperties().get(key);
+        if (getCurrentRevision().getProperties().containsKey(key)){
+            return getCurrentRevision().getProperties().get(key);
+        }
+        return null;
     }
 
     /**
@@ -377,7 +384,7 @@ public final class Document {
         }
 
         if (newId != null && !newId.equalsIgnoreCase(getId())) {
-            Log.w(Database.TAG, String.format("Trying to put wrong _id to this: %s properties: %s", this, properties));
+            Log.w(Database.TAG, "Trying to put wrong _id to this: %s properties: %s", this, properties);
         }
 
         // Process _attachments dict, converting CBLAttachments to dicts:
@@ -475,8 +482,13 @@ public final class Document {
         if (rev == null) {
             return;  // current revision didn't change
         }
+
         if (currentRevision != null && !rev.getRevId().equals(currentRevision.getId())) {
-            currentRevision = new SavedRevision(this, rev);
+            if (!rev.isDeleted()) {
+                currentRevision = new SavedRevision(this, rev);
+            } else {
+                currentRevision = null;
+            }
         }
 
         for (ChangeListener listener : changeListeners) {

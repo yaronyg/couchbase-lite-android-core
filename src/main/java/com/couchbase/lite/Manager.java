@@ -6,13 +6,22 @@ import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.replicator.Puller;
 import com.couchbase.lite.replicator.Pusher;
 import com.couchbase.lite.replicator.Replication;
+import com.couchbase.lite.support.CouchbaseLiteHttpClientFactory;
 import com.couchbase.lite.support.FileDirUtils;
 import com.couchbase.lite.support.HttpClientFactory;
+import com.couchbase.lite.support.Version;
 import com.couchbase.lite.util.Log;
 import com.couchbase.lite.util.StreamUtils;
+
 import org.codehaus.jackson.map.ObjectMapper;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.Principal; // https://github.com/couchbase/couchbase-lite-java-core/issues/39
@@ -27,8 +36,6 @@ import java.util.regex.Pattern;
  * Top-level CouchbaseLite object; manages a collection of databases as a CouchDB server does.
  */
 public final class Manager {
-
-    public static final String VERSION =  "1.0.0-beta2";
 
     /**
      * @exclude
@@ -85,6 +92,17 @@ public final class Manager {
     }
 
     /**
+     * Enable logging for a particular tag / loglevel combo
+     * @param tag Used to identify the source of a log message.  It usually identifies
+     *        the class or activity where the log call occurs.
+     * @param logLevel The loglevel to enable.  Anything matching this loglevel
+     *                 or having a more urgent loglevel will be emitted.  Eg, Log.VERBOSE.
+     */
+    public static void enableLogging(String tag, int logLevel) {
+        Log.enableLogging(tag, logLevel);
+    }
+
+    /**
      * Constructor
      *
      * @throws java.lang.SecurityException - Runtime exception that can be thrown by File.mkdirs()
@@ -92,7 +110,8 @@ public final class Manager {
     @InterfaceAudience.Public
     public Manager(Context context, ManagerOptions options) throws IOException {
 
-        Log.v(Database.TAG, "Starting Manager version: " + VERSION);
+        Log.i(Database.TAG, "Starting Manager version: %s", Version.getVersion());
+
         this.context = context;
         this.directoryFile = context.getFilesDir();
         this.options = (options != null) ? options : DEFAULT_OPTIONS;
@@ -198,7 +217,10 @@ public final class Manager {
         boolean mustExist = false;
         Database db = getDatabaseWithoutOpening(name, mustExist);
         if (db != null) {
-            db.open();
+            boolean opened = db.open();
+            if (!opened) {
+                return null;
+            }
         }
         return db;
     }
@@ -250,6 +272,8 @@ public final class Manager {
             if(attachmentStreams != null) {
                 StreamUtils.copyStreamsToFolder(attachmentStreams,attachmentsFile);
             }
+
+            database.open();
             database.replaceUUIDs();
         }
         catch (FileNotFoundException e) {
@@ -307,8 +331,7 @@ public final class Manager {
             String newFilename = filenameWithNewExtension(oldFilename, DATABASE_SUFFIX_OLD, DATABASE_SUFFIX);
             File newFile = new File(directory, newFilename);
             if (newFile.exists()) {
-                String msg = String.format("Cannot rename %s to %s, %s already exists", oldFilename, newFilename, newFilename);
-                Log.w(Database.TAG, msg);
+                Log.w(Database.TAG, "Cannot rename %s to %s, %s already exists", oldFilename, newFilename, newFilename);
                 continue;
             }
             boolean ok = file.renameTo(newFile);
@@ -428,8 +451,7 @@ public final class Manager {
             }
             db = new Database(path, this);
             if (mustExist && !db.exists()) {
-                String msg = String.format("mustExist is true and db (%s) does not exist", name);
-                Log.w(Database.TAG, msg);
+                Log.w(Database.TAG, "mustExist is true and db (%s) does not exist", name);
                 return null;
             }
             db.setName(name);
@@ -521,7 +543,7 @@ public final class Manager {
             }
 
             if (authorizer != null) {
-                repl.setAuthorizer(authorizer);
+                repl.setAuthenticator(authorizer);
             }
 
             // https://github.com/couchbase/couchbase-lite-java-core/issues/40

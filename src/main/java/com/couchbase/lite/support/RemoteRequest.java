@@ -2,8 +2,11 @@ package com.couchbase.lite.support;
 
 import com.couchbase.lite.Database;
 import com.couchbase.lite.Manager;
+import com.couchbase.lite.auth.AuthenticatorImpl;
+import com.couchbase.lite.auth.Authenticator;
 import com.couchbase.lite.util.Log;
 import com.couchbase.lite.util.URIUtils;
+import com.couchbase.lite.util.Utils;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpException;
@@ -29,33 +32,46 @@ import org.apache.http.client.protocol.ClientContext;
 import org.apache.http.conn.ClientConnectionManager;
 import org.apache.http.entity.ByteArrayEntity;
 import org.apache.http.impl.auth.BasicScheme;
+import org.apache.http.impl.client.ClientParamsStack;
 import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.params.HttpParams;
 import org.apache.http.protocol.ExecutionContext;
 import org.apache.http.protocol.HttpContext;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 
 public class RemoteRequest implements Runnable {
+
+    private static final int MAX_RETRIES = 2;
+    private static final int RETRY_DELAY_MS = 10 * 1000;
 
     protected ScheduledExecutorService workExecutor;
     protected final HttpClientFactory clientFactory;
     protected String method;
     protected URL url;
     protected Object body;
+    protected Authenticator authenticator;
     protected RemoteRequestCompletionBlock onPreCompletion;
     protected RemoteRequestCompletionBlock onCompletion;
     protected RemoteRequestCompletionBlock onPostCompletion;
+    private int retryCount;
+    private Database db;
 
     protected Map<String, Object> requestHeaders;
 
     public RemoteRequest(ScheduledExecutorService workExecutor,
                          HttpClientFactory clientFactory, String method, URL url,
-                         Object body, Map<String, Object> requestHeaders, RemoteRequestCompletionBlock onCompletion) {
+                         Object body, Database db, Map<String, Object> requestHeaders, RemoteRequestCompletionBlock onCompletion) {
         this.clientFactory = clientFactory;
         this.method = method;
         this.url = url;
@@ -63,6 +79,7 @@ public class RemoteRequest implements Runnable {
         this.onCompletion = onCompletion;
         this.workExecutor = workExecutor;
         this.requestHeaders = requestHeaders;
+        this.db = db;
 
     }
 
@@ -113,19 +130,45 @@ public class RemoteRequest implements Runnable {
         return request;
     }
 
-    private void setBody(HttpUriRequest request) {
+    protected void setBody(HttpUriRequest request) {
         // set body if appropriate
         if (body != null && request instanceof HttpEntityEnclosingRequestBase) {
             byte[] bodyBytes = null;
             try {
                 bodyBytes = Manager.getObjectMapper().writeValueAsBytes(body);
             } catch (Exception e) {
-                Log.e(Database.TAG, "Error serializing body of request", e);
+                Log.e(Log.TAG_REMOTE_REQUEST, "Error serializing body of request", e);
             }
             ByteArrayEntity entity = new ByteArrayEntity(bodyBytes);
             entity.setContentType("application/json");
             ((HttpEntityEnclosingRequestBase) request).setEntity(entity);
         }
+    }
+
+    /**
+     *  Set Authenticator for BASIC Authentication
+     */
+    public void setAuthenticator(Authenticator authenticator) {
+        this.authenticator = authenticator;
+    }
+
+    /**
+     * Retry this remote request, unless we've already retried MAX_RETRIES times
+     *
+     * NOTE: This assumes all requests are idempotent, since even though we got an error back, the
+     * request might have succeeded on the remote server, and by retrying we'd be issuing it again.
+     * PUT and POST requests aren't generally idempotent, but the ones sent by the replicator are.
+     *
+     * @return true if going to retry the request, false otherwise
+     */
+    protected boolean retryRequest() {
+        if (retryCount >= MAX_RETRIES) {
+            return false;
+        }
+        workExecutor.schedule(this, RETRY_DELAY_MS, TimeUnit.MILLISECONDS);
+        retryCount += 1;
+        Log.d(Log.TAG_REMOTE_REQUEST, "Will retry in %d ms", RETRY_DELAY_MS);
+        return true;
     }
 
     protected void executeRequest(HttpClient httpClient, HttpUriRequest request) {
@@ -134,26 +177,25 @@ public class RemoteRequest implements Runnable {
         HttpResponse response = null;
 
         try {
-
             response = httpClient.execute(request);
 
             // add in cookies to global store
             try {
                 if (httpClient instanceof DefaultHttpClient) {
                     DefaultHttpClient defaultHttpClient = (DefaultHttpClient)httpClient;
-                    CouchbaseLiteHttpClientFactory.INSTANCE.addCookies(defaultHttpClient.getCookieStore().getCookies());
+                    this.clientFactory.addCookies(defaultHttpClient.getCookieStore().getCookies());
                 }
             } catch (Exception e) {
-                Log.e(Database.TAG, "Unable to add in cookies to global store", e);
+                Log.e(Log.TAG_REMOTE_REQUEST, "Unable to add in cookies to global store", e);
             }
 
             StatusLine status = response.getStatusLine();
+            if (Utils.isTransientError(status) && retryRequest()) {
+                return;
+            }
+
             if (status.getStatusCode() >= 300) {
-                Log.e(Database.TAG,
-                        "Got error " + Integer.toString(status.getStatusCode()));
-                Log.e(Database.TAG, "Request was for: " + request.toString());
-                Log.e(Database.TAG,
-                        "Status reason: " + status.getReasonPhrase());
+                Log.e(Log.TAG_REMOTE_REQUEST, "Got error status: %d for %s.  Reason: %s", status.getStatusCode(), request, status.getReasonPhrase());
                 error = new HttpResponseException(status.getStatusCode(),
                         status.getReasonPhrase());
             } else {
@@ -173,55 +215,56 @@ public class RemoteRequest implements Runnable {
                 }
             }
         } catch (ClientProtocolException e) {
-            Log.e(Database.TAG, "client protocol exception", e);
+            Log.e(Log.TAG_REMOTE_REQUEST, "client protocol exception", e);
             error = e;
         } catch (IOException e) {
-            Log.e(Database.TAG, "io exception", e);
+            Log.e(Log.TAG_REMOTE_REQUEST, "io exception", e);
             error = e;
+            // Treat all IOExceptions as transient, per:
+            // http://hc.apache.org/httpclient-3.x/exception-handling.html
+            if (retryRequest()) {
+                return;
+            }
         }
         respondWithResult(fullBody, error, response);
     }
 
     protected void preemptivelySetAuthCredentials(HttpClient httpClient) {
-        // if the URL contains user info AND if this a DefaultHttpClient
-        // then preemptively set the auth credentials
-        if (url.getUserInfo() != null) {
-            if (url.getUserInfo().contains(":") && !url.getUserInfo().trim().equals(":")) {
-                String[] userInfoSplit = url.getUserInfo().split(":");
-                final Credentials creds = new UsernamePasswordCredentials(
-                        URIUtils.decode(userInfoSplit[0]), URIUtils.decode(userInfoSplit[1]));
+        boolean isUrlBasedUserInfo = false;
+
+        String userInfo = url.getUserInfo();
+        if (userInfo != null) {
+            isUrlBasedUserInfo = true;
+        } else {
+            if (authenticator != null) {
+                AuthenticatorImpl auth = (AuthenticatorImpl) authenticator;
+                userInfo = auth.authUserInfo();
+            }
+        }
+
+        if (userInfo != null) {
+            if (userInfo.contains(":") && !userInfo.trim().equals(":")) {
+                String[] userInfoElements = userInfo.split(":");
+                String username = isUrlBasedUserInfo ? URIUtils.decode(userInfoElements[0]): userInfoElements[0];
+                String password = isUrlBasedUserInfo ? URIUtils.decode(userInfoElements[1]): userInfoElements[1];
+                final Credentials credentials = new UsernamePasswordCredentials(username, password);
 
                 if (httpClient instanceof DefaultHttpClient) {
                     DefaultHttpClient dhc = (DefaultHttpClient) httpClient;
-
                     HttpRequestInterceptor preemptiveAuth = new HttpRequestInterceptor() {
-
                         @Override
-                        public void process(HttpRequest request,
-                                HttpContext context) throws HttpException,
-                                IOException {
-                            AuthState authState = (AuthState) context
-                                    .getAttribute(ClientContext.TARGET_AUTH_STATE);
-                            CredentialsProvider credsProvider = (CredentialsProvider) context
-                                    .getAttribute(ClientContext.CREDS_PROVIDER);
-                            HttpHost targetHost = (HttpHost) context
-                                    .getAttribute(ExecutionContext.HTTP_TARGET_HOST);
-
+                        public void process(HttpRequest request, HttpContext context) throws HttpException, IOException {
+                            AuthState authState = (AuthState) context.getAttribute(ClientContext.TARGET_AUTH_STATE);
                             if (authState.getAuthScheme() == null) {
-                                AuthScope authScope = new AuthScope(
-                                        targetHost.getHostName(),
-                                        targetHost.getPort());
                                 authState.setAuthScheme(new BasicScheme());
-                                authState.setCredentials(creds);
+                                authState.setCredentials(credentials);
                             }
                         }
                     };
-
                     dhc.addRequestInterceptor(preemptiveAuth, 0);
                 }
             } else {
-                Log.w(Database.TAG,
-                        "RemoteRequest Unable to parse user info, not setting credentials");
+                Log.w(Log.TAG_REMOTE_REQUEST, "RemoteRequest Unable to parse user info, not setting credentials");
             }
         }
     }
@@ -242,14 +285,14 @@ public class RemoteRequest implements Runnable {
                         }
                     } catch (Exception e) {
                         // don't let this crash the thread
-                        Log.e(Database.TAG,
+                        Log.e(Log.TAG_REMOTE_REQUEST,
                                 "RemoteRequestCompletionBlock throw Exception",
                                 e);
                     }
                 }
             });
         } else {
-            Log.e(Database.TAG, "work executor was null!!!");
+            Log.e(Log.TAG_REMOTE_REQUEST, "Work executor was null!");
         }
     }
 

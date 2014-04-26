@@ -1,7 +1,6 @@
 package com.couchbase.lite.auth;
 
 import com.couchbase.lite.Database;
-import com.couchbase.lite.support.HttpClientFactory;  //https://github.com/couchbase/couchbase-lite-java-core/issues/41
 import com.couchbase.lite.util.Log;
 
 import java.net.URL;
@@ -10,8 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-// Changed to implements from extends per https://github.com/couchbase/couchbase-lite-java-core/issues/41
-public class FacebookAuthorizer implements Authorizer {
+public class FacebookAuthorizer extends Authorizer {
 
     public static final String LOGIN_PARAMETER_ACCESS_TOKEN = "access_token";
     public static final String QUERY_PARAMETER = "facebookAccessToken";
@@ -40,19 +38,13 @@ public class FacebookAuthorizer implements Authorizer {
                 return null;
             }
         } catch (Exception e) {
-            Log.e(Database.TAG, "Error looking login parameters for site", e);
+            Log.e(Log.TAG_SYNC, "Error looking login parameters for site", e);
         }
         return null;
     }
 
     public String loginPathForSite(URL site) {
         return "/_facebook";
-    }
-
-    @Override
-    // Added per https://github.com/couchbase/couchbase-lite-java-core/issues/41
-    public HttpClientFactory getHttpClientFactory() {
-        return null;
     }
 
     public synchronized static String registerAccessToken(String accessToken, String email, String origin) {
@@ -64,11 +56,10 @@ public class FacebookAuthorizer implements Authorizer {
         if (accessTokens == null) {
             accessTokens = new HashMap<List<String>, String>();
         }
-        Log.d(Database.TAG, "FacebookAuthorizer registering key: " + key);
+        Log.v(Log.TAG_SYNC, "FacebookAuthorizer registering key: %s", key);
         accessTokens.put(key, accessToken);
 
         return email;
-
     }
 
 
@@ -77,10 +68,10 @@ public class FacebookAuthorizer implements Authorizer {
             List<String> key = new ArrayList<String>();
             key.add(email);
             key.add(site.toExternalForm().toLowerCase());
-            Log.d(Database.TAG, "FacebookAuthorizer looking up key: " + key + " from list of access tokens");
+            Log.v(Log.TAG_SYNC, "FacebookAuthorizer looking up key: %s from list of access tokens", key);
             return accessTokens.get(key);
         } catch (Exception e) {
-            Log.e(Database.TAG, "Error looking up access token", e);
+            Log.e(Log.TAG_SYNC, "Error looking up access token", e);
         }
         return null;
     }

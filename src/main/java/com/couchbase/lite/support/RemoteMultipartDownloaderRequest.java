@@ -28,7 +28,7 @@ public class RemoteMultipartDownloaderRequest extends RemoteRequest {
     public RemoteMultipartDownloaderRequest(ScheduledExecutorService workExecutor,
                                             HttpClientFactory clientFactory, String method, URL url,
                                             Object body, Database db, Map<String, Object> requestHeaders, RemoteRequestCompletionBlock onCompletion) {
-        super(workExecutor, clientFactory, method, url, body, requestHeaders, onCompletion);
+        super(workExecutor, clientFactory, method, url, body, db, requestHeaders, onCompletion);
         this.db = db;
     }
 
@@ -61,19 +61,15 @@ public class RemoteMultipartDownloaderRequest extends RemoteRequest {
                 // add in cookies to global store
                 if (httpClient instanceof DefaultHttpClient) {
                     DefaultHttpClient defaultHttpClient = (DefaultHttpClient)httpClient;
-                    CouchbaseLiteHttpClientFactory.INSTANCE.addCookies(defaultHttpClient.getCookieStore().getCookies());
+                    this.clientFactory.addCookies(defaultHttpClient.getCookieStore().getCookies());
                 }
             } catch (Exception e) {
-                Log.e(Database.TAG, "Unable to add in cookies to global store", e);
+                Log.e(Log.TAG_REMOTE_REQUEST, "Unable to add in cookies to global store", e);
             }
 
             StatusLine status = response.getStatusLine();
             if (status.getStatusCode() >= 300) {
-                Log.e(Database.TAG,
-                        "Got error " + Integer.toString(status.getStatusCode()));
-                Log.e(Database.TAG, "Request was for: " + request.toString());
-                Log.e(Database.TAG,
-                        "Status reason: " + status.getReasonPhrase());
+                Log.e(Log.TAG_REMOTE_REQUEST, "Got error status: %d for %s.  Reason: %s", status.getStatusCode(), request, status.getReasonPhrase());
                 error = new HttpResponseException(status.getStatusCode(),
                         status.getReasonPhrase());
             } else {
@@ -135,10 +131,10 @@ public class RemoteMultipartDownloaderRequest extends RemoteRequest {
                 }
             }
         } catch (ClientProtocolException e) {
-            Log.e(Database.TAG, "client protocol exception", e);
+            Log.e(Log.TAG_REMOTE_REQUEST, "client protocol exception", e);
             error = e;
         } catch (IOException e) {
-            Log.e(Database.TAG, "io exception", e);
+            Log.e(Log.TAG_REMOTE_REQUEST, "io exception", e);
             error = e;
         }
     }
