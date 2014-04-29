@@ -24,7 +24,11 @@ import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.replicator.Puller;
 import com.couchbase.lite.replicator.Pusher;
 import com.couchbase.lite.replicator.Replication;
-import com.couchbase.lite.storage.*;
+import com.couchbase.lite.storage.ContentValues;
+import com.couchbase.lite.storage.Cursor;
+import com.couchbase.lite.storage.SQLException;
+import com.couchbase.lite.storage.SQLiteStorageEngine;
+import com.couchbase.lite.storage.SQLiteStorageEngineFactory;
 import com.couchbase.lite.support.Base64;
 import com.couchbase.lite.support.FileDirUtils;
 import com.couchbase.lite.support.HttpClientFactory;
@@ -41,7 +45,15 @@ import java.net.URL;
 import java.nio.charset.Charset;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
@@ -136,6 +148,7 @@ public final class Database {
         KNOWN_SPECIAL_KEYS.add("_conflicts");
         KNOWN_SPECIAL_KEYS.add("_deleted_conflicts");
         KNOWN_SPECIAL_KEYS.add("_local_seq");
+        KNOWN_SPECIAL_KEYS.add("_removed");
     }
 
     /**
@@ -3153,15 +3166,28 @@ public final class Database {
             return null;
         }
 
+        List<String> specialKeysToLeave = Arrays.asList(
+                "_removed",
+                "_replication_id",
+                "_replication_state",
+                "_replication_state_time");
+
         // Don't allow any "_"-prefixed keys. Known ones we'll ignore, unknown ones are an error.
         Map<String,Object> properties = new HashMap<String,Object>(origProps.size());
         for (String key : origProps.keySet()) {
+            boolean shouldAdd = false;
             if(key.startsWith("_")) {
                 if(!KNOWN_SPECIAL_KEYS.contains(key)) {
                     Log.e(TAG, "Database: Invalid top-level key '%s' in document to be inserted", key);
                     return null;
                 }
+                if (specialKeysToLeave.contains(key)) {
+                    shouldAdd = true;
+                }
             } else {
+                shouldAdd = true;
+            }
+            if (shouldAdd) {
                 properties.put(key, origProps.get(key));
             }
         }

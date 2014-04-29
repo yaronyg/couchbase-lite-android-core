@@ -480,6 +480,14 @@ public final class Manager {
         }
     }
 
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public Replication getReplicator(Map<String,Object> properties) throws CouchbaseLiteException {
+        return getReplicator(properties, null);
+    }
+
     // Adding principal argument is for https://github.com/couchbase/couchbase-lite-java-core/issues/40
     /**
      * @exclude
