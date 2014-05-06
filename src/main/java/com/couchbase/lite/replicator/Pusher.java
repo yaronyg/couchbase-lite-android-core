@@ -15,6 +15,7 @@ import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.support.RemoteRequestCompletionBlock;
 import com.couchbase.lite.support.HttpClientFactory;
 import com.couchbase.lite.util.Log;
+import com.couchbase.lite.util.URIUtils;
 
 import org.apache.http.client.HttpResponseException;
 import org.apache.http.entity.mime.MultipartEntity;
@@ -47,7 +48,7 @@ public final class Pusher extends Replication implements Database.ChangeListener
     private boolean creatingTarget;
     private boolean observing;
     private ReplicationFilter filter;
-
+    private boolean dontSendMultipart = false;
     SortedSet<Long> pendingSequences;
     Long maxPendingSequence;
 
@@ -281,6 +282,7 @@ public final class Pusher extends Replication implements Database.ChangeListener
                         // Go through the list of local changes again, selecting the ones the destination server
                         // said were missing and mapping them to a JSON dictionary in the form _bulk_docs wants:
                         final List<Object> docsToSend = new ArrayList<Object>();
+                        RevisionList revsToSend = new RevisionList();
                         for(RevisionInternal rev : changes) {
                             // Is this revision in the server's 'missing' list?
                             Map<String,Object> properties = null;
@@ -296,50 +298,68 @@ public final class Pusher extends Replication implements Database.ChangeListener
 
                             // Get the revision's properties:
                             EnumSet<Database.TDContentOptions> contentOptions = EnumSet.of(
-                                    Database.TDContentOptions.TDIncludeAttachments,
-                                    Database.TDContentOptions.TDBigAttachmentsFollow
+                                    Database.TDContentOptions.TDIncludeAttachments
                             );
 
+                            if (!dontSendMultipart && revisionBodyTransformationBlock==null) {
+                                contentOptions.add(Database.TDContentOptions.TDBigAttachmentsFollow);
+                            }
+
+                            RevisionInternal loadedRev;
                             try {
-                                db.loadRevisionBody(rev, contentOptions);
+                                loadedRev = db.loadRevisionBody(rev, contentOptions);
+                                properties = new HashMap<String,Object>(rev.getProperties());
                             } catch (CouchbaseLiteException e1) {
                                 Log.w(Log.TAG_SYNC, "%s Couldn't get local contents of %s", rev, Pusher.this);
                                 revisionFailed();
                                 continue;
                             }
-                            properties = new HashMap<String,Object>(rev.getProperties());
+
+                            RevisionInternal populatedRev = transformRevision(loadedRev);
+
+                            List<String> possibleAncestors = (List<String>)revResults.get("possible_ancestors");
+
+                            properties = new HashMap<String,Object>(populatedRev.getProperties());
+                            Map<String,Object> revisions = db.getRevisionHistoryDictStartingFromAnyAncestor(populatedRev, possibleAncestors);
+                            properties.put("_revisions",revisions);
+                            populatedRev.setProperties(properties);
 
                             // Strip any attachments already known to the target db:
                             if (properties.containsKey("_attachments")) {
-                                /* TODO: port this ios code
-                                 // Look for the latest common ancestor and stub out older attachments:
-                                    NSArray* possible = revResults[@"possible_ancestors"];
-                                    int minRevPos = findCommonAncestor(rev, possible);
-                                    [CBLDatabase stubOutAttachmentsIn: rev beforeRevPos: minRevPos + 1
-                                                   attachmentsFollow: NO];
-                                    properties = rev.properties;
-                                 */
-                                if (uploadMultipartRevision(rev)) {
+                                // Look for the latest common ancestor and stub out older attachments:
+                                int minRevPos = findCommonAncestor(populatedRev, possibleAncestors);
+
+                                Database.stubOutAttachmentsInRevBeforeRevPos(populatedRev,minRevPos + 1,false);
+
+                                properties = populatedRev.getProperties();
+
+                                if (!dontSendMultipart && uploadMultipartRevision(populatedRev)) {
                                     continue;
                                 }
                             }
 
-                            if(properties != null) {
-
-                                // TODO: ios code does not call db.getRevisionHistoryDict() here
-                                // Add the _revisions list:
-                                properties.put("_revisions", db.getRevisionHistoryDict(rev));
-
-                                //now add it to the docs to send
-                                docsToSend.add(properties);
-
-                                assert properties.get("_id") != null;
+                            if(properties == null || !properties.containsKey("_id")) {
+                                throw new IllegalStateException("properties must contain a document _id");
                             }
+
+                            revsToSend.add(rev);
+                            docsToSend.add(properties);
+
+                            //TODO: port this code from iOS
+                                /*
+                                bufferedSize += [CBLJSON estimateMemorySize: properties];
+                                if (bufferedSize > kMaxBulkDocsObjectSize) {
+                                    [self uploadBulkDocs: docsToSend changes: revsToSend];
+                                    docsToSend = $marray();
+                                    revsToSend = [[CBL_RevisionList alloc] init];
+                                    bufferedSize = 0;
+                                }
+                                */
 
                         }
 
                         // Post the revisions to the destination:
-                        uploadBulkDocs(docsToSend, changes);
+                        uploadBulkDocs(docsToSend, revsToSend);
 
                     } else {
                         // None of the revisions are new to the remote
@@ -435,7 +455,6 @@ public final class Pusher extends Replication implements Database.ChangeListener
         MultipartEntity multiPart = null;
 
         Map<String, Object> revProps = revision.getProperties();
-        revProps.put("_revisions", db.getRevisionHistoryDict(revision));
 
         // TODO: refactor this to
         /*
@@ -506,18 +525,18 @@ public final class Pusher extends Replication implements Database.ChangeListener
             public void onCompletion(Object result, Throwable e) {
                 try {
                     if(e != null) {
-                        // TODO:
-                        /*
-                        if ($equal(error.domain, CBLHTTPErrorDomain)
-                                    && error.code == kCBLStatusUnsupportedType) {
-                              // Server doesn't like multipart, eh? Fall back to JSON.
-                              _dontSendMultipart = YES;
-                              [self uploadJSONRevision: rev];
-                          }
-                         */
-                        Log.e(Log.TAG_SYNC, "Exception uploading multipart request", e);
-                        setError(e);
-                        revisionFailed();
+                        if(e instanceof HttpResponseException) {
+                            // Server doesn't like multipart, eh? Fall back to JSON.
+                            if (((HttpResponseException) e).getStatusCode() == 415) {
+                                //status 415 = "bad_content_type"
+                                dontSendMultipart = true;
+                                uploadJsonRevision(revision);
+                            }
+                        } else {
+                            Log.e(Log.TAG_SYNC, "Exception uploading multipart request", e);
+                            setError(e);
+                            revisionFailed();
+                        }
                     } else {
                         Log.v(Log.TAG_SYNC, "Uploaded multipart request.");
                         removePending(revision);
@@ -534,6 +553,59 @@ public final class Pusher extends Replication implements Database.ChangeListener
 
     }
 
+    // Fallback to upload a revision if uploadMultipartRevision failed due to the server's rejecting
+    // multipart format.
+    private void uploadJsonRevision(final RevisionInternal rev) {
+        // Get the revision's properties:
+        if (!db.inlineFollowingAttachmentsIn(rev)) {
+            error = new CouchbaseLiteException(Status.BAD_ATTACHMENT);
+            revisionFailed();
+            return;
+        }
 
+        asyncTaskStarted();
+        String path = String.format("/%s?new_edits=false", URIUtils.encode(rev.getDocId()));
+        sendAsyncRequest("PUT",
+        path,
+        rev.getProperties(),
+        new RemoteRequestCompletionBlock() {
+            public void onCompletion(Object result, Throwable e) {
+                if (e != null) {
+                    setError(e);
+                    revisionFailed();
+                } else {
+                    Log.v(Log.TAG_SYNC, "%s: Sent %s (JSON), response=%s", this, rev, result);
+                    removePending(rev);
+                }
+                asyncTaskFinished(1);
+            }
+        });
+    }
+
+
+
+
+    // Given a revision and an array of revIDs, finds the latest common ancestor revID
+    // and returns its generation #. If there is none, returns 0.
+    private static int findCommonAncestor(RevisionInternal rev, List<String> possibleRevIDs) {
+        if (possibleRevIDs == null || possibleRevIDs.size() == 0) {
+            return 0;
+        }
+        List<String> history = Database.parseCouchDBRevisionHistory(rev.getProperties());
+
+        //rev is missing _revisions property
+        assert(history != null);
+
+        boolean changed = history.retainAll(possibleRevIDs);
+        String ancestorID = history.size() == 0 ? null : history.get(0);
+
+        if (ancestorID == null) {
+            return 0;
+        }
+
+        int generation = Database.parseRevIDNumber(ancestorID);
+
+        return generation;
+    }
 }
 

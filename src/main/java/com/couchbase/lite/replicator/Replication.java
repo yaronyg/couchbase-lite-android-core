@@ -1271,6 +1271,10 @@ public abstract class Replication implements NetworkReachabilityListener {
                     Log.w(Log.TAG_SYNC, "%s: Database is null, ignoring remote checkpoint response", this);
                     return;
                 }
+                if (!db.isOpen()) {
+                    Log.w(Log.TAG_SYNC, "%s: Database is closed, ignoring remote checkpoint response", this);
+                    return;
+                }
                 if (e != null) {
                     // Failed to save checkpoint:
                     switch (getStatusFromError(e)) {
@@ -1354,9 +1358,11 @@ public abstract class Replication implements NetworkReachabilityListener {
         Log.v(Log.TAG_SYNC, "%s: stopRemoteRequests() cancelling: %d requests", this, requests.size());
         for (RemoteRequest request : requests.keySet()) {
             Future future = requests.get(request);
-            Log.v(Log.TAG_SYNC, "%s: cancelling future %s for request: %s isCancelled: %s isDone: %s", this, future, request, future.isCancelled(), future.isDone());
-            boolean result = future.cancel(true);
-            Log.v(Log.TAG_SYNC, "%s: cancelled future, result: %s", this, result);
+            if (future != null) {
+                Log.v(Log.TAG_SYNC, "%s: cancelling future %s for request: %s isCancelled: %s isDone: %s", this, future, request, future.isCancelled(), future.isDone());
+                boolean result = future.cancel(true);
+                Log.v(Log.TAG_SYNC, "%s: cancelled future, result: %s", this, result);
+            }
         }
     }
 
@@ -1398,11 +1404,11 @@ public abstract class Replication implements NetworkReachabilityListener {
     }
 
 
-    protected RevisionInternal transformRevision(final RevisionInternal rev) {
-        RevisionInternal xformed = rev;
+    protected RevisionInternal transformRevision(RevisionInternal rev) {
         if(revisionBodyTransformationBlock != null) {
             try {
-                xformed = revisionBodyTransformationBlock.invoke(rev);
+                final int generation = rev.getGeneration();
+                RevisionInternal xformed = revisionBodyTransformationBlock.invoke(rev);
                 if (xformed == null)
                     return null;
                 if (xformed != rev) {
@@ -1422,17 +1428,18 @@ public abstract class Replication implements NetworkReachabilityListener {
                                     throw new IllegalStateException("Transformer added attachment without adding data");
                                 }
                                 Map<String,Object> nuInfo = new HashMap<String, Object>(info);
-                                nuInfo.put("revpos",rev.getGeneration());
+                                nuInfo.put("revpos",generation);
                                 return nuInfo;
                             }
                         });
                     }
+                    rev = xformed;
                 }
             }catch (Exception e) {
                 Log.w(Log.TAG_SYNC,"%s: Exception transforming a revision of doc '%s", e, this, rev.getDocId());
             }
         }
-        return xformed;
+        return rev;
     }
 
     /**

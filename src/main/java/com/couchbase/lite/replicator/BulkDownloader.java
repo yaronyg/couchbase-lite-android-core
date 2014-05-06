@@ -211,7 +211,6 @@ public class BulkDownloader extends RemoteRequest implements MultipartReaderDele
         if (_docReader == null) {
             throw new IllegalStateException("_docReader is not defined");
         }
-        Log.v(Log.TAG_SYNC, "%s: appending data to document", this);
         _docReader.appendData(data);
     }
 
@@ -219,7 +218,6 @@ public class BulkDownloader extends RemoteRequest implements MultipartReaderDele
     /**
      * This method is called when a part is complete.
      */
-
     public void finishedPart() {
         Log.v(Log.TAG_SYNC, "%s: Finished document", this);
         if (_docReader == null) {
