@@ -86,21 +86,28 @@ public class RemoteRequest implements Runnable {
     @Override
     public void run() {
 
-        HttpClient httpClient = clientFactory.getHttpClient();
+        try {
 
-        ClientConnectionManager manager = httpClient.getConnectionManager();
+            HttpClient httpClient = clientFactory.getHttpClient();
 
-        HttpUriRequest request = createConcreteRequest();
+            ClientConnectionManager manager = httpClient.getConnectionManager();
 
-        preemptivelySetAuthCredentials(httpClient);
+            HttpUriRequest request = createConcreteRequest();
 
-        request.addHeader("Accept", "multipart/related, application/json");
+            preemptivelySetAuthCredentials(httpClient);
 
-        addRequestHeaders(request);
+            request.addHeader("Accept", "multipart/related, application/json");
 
-        setBody(request);
+            addRequestHeaders(request);
 
-        executeRequest(httpClient, request);
+            setBody(request);
+
+            executeRequest(httpClient, request);
+
+        } catch (Exception e) {
+            Log.e(Log.TAG_REMOTE_REQUEST, "caught and rethrowing unexpected exception: ", e);
+            throw new RuntimeException(e);
+        }
 
     }
 
@@ -225,8 +232,16 @@ public class RemoteRequest implements Runnable {
             if (retryRequest()) {
                 return;
             }
+        } catch (Exception e) {
+            Log.e(Log.TAG_REMOTE_REQUEST, "%s: caught and rethrowing unexpected exception", e, this);
+            throw new RuntimeException(e);
+        } finally {
+            Log.v(Log.TAG_REMOTE_REQUEST, "%s: finally clause entered", this);
         }
+
+        Log.v(Log.TAG_REMOTE_REQUEST, "%s: calling respondWithResult", this);
         respondWithResult(fullBody, error, response);
+        
     }
 
     protected void preemptivelySetAuthCredentials(HttpClient httpClient) {
@@ -270,6 +285,9 @@ public class RemoteRequest implements Runnable {
     }
 
     public void respondWithResult(final Object result, final Throwable error, final HttpResponse response) {
+
+        Log.e(Log.TAG_REMOTE_REQUEST, "respondWithResult()");
+
         if (workExecutor != null) {
             workExecutor.submit(new Runnable() {
 

@@ -1,6 +1,13 @@
 package com.couchbase.lite.replicator;
 
-import com.couchbase.lite.*;
+import com.couchbase.lite.AsyncTask;
+import com.couchbase.lite.CouchbaseLiteException;
+import com.couchbase.lite.Database;
+import com.couchbase.lite.Manager;
+import com.couchbase.lite.Misc;
+import com.couchbase.lite.NetworkReachabilityListener;
+import com.couchbase.lite.RevisionList;
+import com.couchbase.lite.Status;
 import com.couchbase.lite.auth.Authenticator;
 import com.couchbase.lite.auth.AuthenticatorImpl;
 import com.couchbase.lite.auth.Authorizer;
@@ -8,11 +15,20 @@ import com.couchbase.lite.auth.FacebookAuthorizer;
 import com.couchbase.lite.auth.PersonaAuthorizer;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
-import com.couchbase.lite.support.*;
+import com.couchbase.lite.support.BatchProcessor;
+import com.couchbase.lite.support.Batcher;
+import com.couchbase.lite.support.CouchbaseLiteHttpClientFactory;
+import com.couchbase.lite.support.HttpClientFactory;
+import com.couchbase.lite.support.PersistentCookieStore;
+import com.couchbase.lite.support.RemoteMultipartDownloaderRequest;
+import com.couchbase.lite.support.RemoteMultipartRequest;
+import com.couchbase.lite.support.RemoteRequest;
+import com.couchbase.lite.support.RemoteRequestCompletionBlock;
 import com.couchbase.lite.util.CollectionUtils;
 import com.couchbase.lite.util.Log;
 import com.couchbase.lite.util.TextUtils;
 import com.couchbase.lite.util.URIUtils;
+
 import org.apache.http.Header;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.CookieStore;
@@ -518,7 +534,11 @@ public abstract class Replication implements NetworkReachabilityListener {
         continuous = false;
         stopRemoteRequests();
         cancelPendingRetryIfReady();
-        db.forgetReplication(this);
+        if (db != null) {
+            db.forgetReplication(this);
+        } else {
+            Log.w(Log.TAG_SYNC, "%s: not calling db.forgetReplication(), since db is null", this);
+        }
         if (running && asyncTaskCount <= 0) {
             Log.v(Log.TAG_SYNC, "%s: calling stopped()", this);
             stopped();
@@ -688,8 +708,12 @@ public abstract class Replication implements NetworkReachabilityListener {
      */
     private void clearDbRef() {
         if (savingCheckpoint && lastSequence != null && db != null) {
-            db.setLastSequence(lastSequence, remoteCheckpointDocID(), !isPull());
-            savingCheckpoint = false; // https://github.com/couchbase/couchbase-lite-java-core/issues/136
+            if (!db.isOpen()) {
+                Log.w(Log.TAG_SYNC, "Not attempting to setLastSequence, db is closed");
+            } else {
+                db.setLastSequence(lastSequence, remoteCheckpointDocID(), !isPull());
+            }
+            Log.v(Log.TAG_SYNC, "%s: clearDbRef() setting db to null", this);
             db = null;
         }
     }
