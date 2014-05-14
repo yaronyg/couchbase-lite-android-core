@@ -35,33 +35,31 @@ public class RemoteMultipartDownloaderRequest extends RemoteRequest {
     @Override
     public void run() {
 
-        try {
-            HttpClient httpClient = clientFactory.getHttpClient();
+        HttpClient httpClient = clientFactory.getHttpClient();
 
-            preemptivelySetAuthCredentials(httpClient);
+        preemptivelySetAuthCredentials(httpClient);
 
-            HttpUriRequest request = createConcreteRequest();
+        request.addHeader("Accept", "*/*");
 
-            request.addHeader("Accept", "*/*");
+        addRequestHeaders(request);
 
-            addRequestHeaders(request);
-
-            executeRequest(httpClient, request);
-
-        } catch (Exception e) {
-            Log.e(Log.TAG_REMOTE_REQUEST, "caught and rethrowing unexpected exception: ", e);
-            throw new RuntimeException(e);
-        }
+        executeRequest(httpClient, request);
 
     }
 
     protected void executeRequest(HttpClient httpClient, HttpUriRequest request) {
         Object fullBody = null;
         Throwable error = null;
+        HttpResponse response = null;
 
         try {
 
-            HttpResponse response = httpClient.execute(request);
+            if (request.isAborted()) {
+                respondWithResult(fullBody, new Exception(String.format("%s: Request %s has been aborted", this, request)), response);
+                return;
+            }
+
+            response = httpClient.execute(request);
 
             try {
                 // add in cookies to global store
@@ -136,19 +134,17 @@ public class RemoteMultipartDownloaderRequest extends RemoteRequest {
 
                 }
             }
-        } catch (ClientProtocolException e) {
-            Log.e(Log.TAG_REMOTE_REQUEST, "client protocol exception", e);
-            error = e;
         } catch (IOException e) {
-            Log.e(Log.TAG_REMOTE_REQUEST, "io exception", e);
+            Log.e(Log.TAG_REMOTE_REQUEST, "%s: io exception", e, this);
             error = e;
+            respondWithResult(fullBody, e, response);
         } catch (Exception e) {
-            Log.e(Log.TAG_REMOTE_REQUEST, "%s: caught and rethrowing unexpected exception", e, this);
-            throw new RuntimeException(e);
+            Log.e(Log.TAG_REMOTE_REQUEST, "%s: executeRequest() Exception: ", e, this);
+            error = e;
+            respondWithResult(fullBody, e, response);
         } finally {
-            Log.v(Log.TAG_REMOTE_REQUEST, "%s: finally clause entered", this);
+            Log.e(Log.TAG_REMOTE_REQUEST, "%s: executeRequest() finally", this);
         }
-
     }
 
 }
