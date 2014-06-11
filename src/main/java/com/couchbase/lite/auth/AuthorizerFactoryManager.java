@@ -33,6 +33,6 @@ public class AuthorizerFactoryManager {
             }
         }
 
-        throw new CouchbaseLiteException("Auth element encodes unsupported auth request mechanism.", new Status(Status.BAD_REQUEST));
+        return null;
     }
 }

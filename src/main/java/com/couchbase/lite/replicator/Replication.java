@@ -803,7 +803,8 @@ public abstract class Replication implements NetworkReachabilityListener {
                     if (error != null) {
                         // If not at /db/_session, try CouchDB location /_session
                         if (error instanceof HttpResponseException &&
-                                ((HttpResponseException) error).getStatusCode() == 404 &&
+                                (((HttpResponseException) error).getStatusCode() == 404 ||
+                                        ((HttpResponseException) error).getStatusCode() == 400) && // https://github.com/couchbase/couchbase-lite-java-core/issues/207
                                 sessionPath.equalsIgnoreCase("/_session")) {
 
                             checkSessionAtPath("_session");

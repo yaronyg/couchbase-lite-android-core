@@ -21,6 +21,11 @@ public class BuiltInAuthorizerFactory implements AuthorizerFactory {
 
         Map<String, Object> authMap = replicatorArguments.getPush() ? replicatorArguments.getTargetAuth() : replicatorArguments.getSourceAuth();
 
+        if (authMap == null) {
+            // There are no auth arguments
+            return null;
+        }
+
         Boolean containsFacebook = authMap.containsKey(facebook);
         Boolean containsPersona = authMap.containsKey(persona);
 

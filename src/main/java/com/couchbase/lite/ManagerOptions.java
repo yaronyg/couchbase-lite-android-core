@@ -1,6 +1,10 @@
 package com.couchbase.lite;
 
+import com.couchbase.lite.auth.AuthorizerFactory;
 import com.couchbase.lite.auth.AuthorizerFactoryManager; // https://github.com/couchbase/couchbase-lite-java-core/issues/41
+import com.couchbase.lite.auth.BuiltInAuthorizerFactory;
+
+import java.util.ArrayList;
 
 /**
  * Option flags for Manager initialization.
@@ -16,7 +20,7 @@ public class ManagerOptions {
 
     // https://github.com/couchbase/couchbase-lite-java-core/issues/41
     public ManagerOptions() {
-		this(null);
+        this(new AuthorizerFactoryManager(new ArrayList<AuthorizerFactory>() {{ add(new BuiltInAuthorizerFactory()); }}));
     }
 
     // https://github.com/couchbase/couchbase-lite-java-core/issues/41
