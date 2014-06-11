@@ -1,3 +1,4 @@
+
 apply plugin: 'java'
 apply plugin: 'maven'
 apply plugin: 'eclipse'
@@ -5,7 +6,6 @@ apply plugin: 'eclipse'
 sourceCompatibility = 1.6
 
 repositories {
-	// https://github.com/couchbase/couchbase-lite-java-core/issues/180
     mavenLocal()
     maven { url "http://thaliartifactory.cloudapp.net/artifactory/libs-snapshot" }
     maven { url "http://thaliartifactory.cloudapp.net/artifactory/libs-release" }
@@ -31,7 +31,7 @@ task createMavenDirectory(type: Exec) {
 
     ext {
         uploadUser = System.getenv("MAVEN_UPLOAD_USERNAME") + ":" + System.getenv("MAVEN_UPLOAD_PASSWORD")
-        mkcolPath  = System.getenv("MAVEN_UPLOAD_REPO_URL") + "com/couchbase/lite/java-core/" + System.getenv("MAVEN_UPLOAD_VERSION") + "/"
+        mkcolPath  = System.getenv("MAVEN_UPLOAD_REPO_URL") + "com/couchbase/lite/couchbase-lite-java-core/" + System.getenv("MAVEN_UPLOAD_VERSION") + "/"
     }
     commandLine "curl", "--user", uploadUser, "-X", "MKCOL", mkcolPath
 }
@@ -64,7 +64,7 @@ uploadArchives {
             pom.version = "${System.properties['UPLOAD_VERSION_CBLITE']}"  // https://github.com/couchbase/couchbase-lite-java-core/issues/34
             //pom.version = System.getenv("MAVEN_UPLOAD_VERSION")
             pom.groupId = 'com.couchbase.lite'
-            pom.artifactId = 'java-core'
+            pom.artifactId = 'couchbase-lite-java-core'
             pom.project {
                 licenses {
                     license {

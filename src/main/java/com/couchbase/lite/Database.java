@@ -95,7 +95,7 @@ public final class Database {
 
     private BlobStore attachments;
     private Manager manager;
-    final private List<ChangeListener> changeListeners;
+    final private CopyOnWriteArrayList<ChangeListener> changeListeners;
     private Cache<String, Document> docCache;
     private List<DocumentChange> changesToNotify;
     private boolean postingChangeNotifications;
@@ -715,7 +715,7 @@ public final class Database {
      */
     @InterfaceAudience.Public
     public void addChangeListener(ChangeListener listener) {
-        changeListeners.add(listener);
+        changeListeners.addIfAbsent(listener);
     }
 
     /**
@@ -3570,7 +3570,7 @@ public final class Database {
 
             // Bump the revID and update the JSON:
             byte[] json = null;
-            if(!oldRev.isDeleted()) {
+            if(oldRev.getProperties() != null && oldRev.getProperties().size() > 0) {
                 json = encodeDocumentJSON(oldRev);
                 if(json == null) {
                     // bad or missing json
@@ -3808,6 +3808,10 @@ public final class Database {
     @InterfaceAudience.Private
     public void forceInsert(RevisionInternal rev, List<String> revHistory, URL source) throws CouchbaseLiteException {
 
+        // TODO: in the iOS version, it is passed an immutable RevisionInternal and then
+        // TODO: creates a mutable copy.  We should do the same here.
+        // TODO: see github.com/couchbase/couchbase-lite-java-core/issues/206#issuecomment-44364624
+
         RevisionInternal winningRev = null;
         boolean inConflict = false;
 
@@ -3837,6 +3841,19 @@ public final class Database {
             RevisionList localRevs = getAllRevisionsOfDocumentID(docId, docNumericID, false);
             if(localRevs == null) {
                 throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
+            }
+
+            // Validate against the latest common ancestor:
+            if(validations != null && validations.size() > 0) {
+                RevisionInternal oldRev = null;
+                for (int i = 1; i < historyCount; i++) {
+                    oldRev = localRevs.revWithDocIdAndRevId(docId, revHistory.get(i));
+                    if (oldRev != null) {
+                        break;
+                    }
+                }
+                String parentRevId = (historyCount > 1) ? revHistory.get(1) : null;
+                validateRevision(rev, oldRev, parentRevId);
             }
 
             List<Boolean> outIsDeleted = new ArrayList<Boolean>();
