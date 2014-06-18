@@ -571,7 +571,7 @@ public final class Pusher extends Replication implements Database.ChangeListener
                             Log.v(Log.TAG_SYNC, "Got an error closing an internal input stream, this really shouldn't matter", e1);
                         }
                     }
-
+                    
                     addToCompletedChangesCount(1);
                     Log.v(Log.TAG_SYNC, "%s | %s: uploadMultipartRevision() calling asyncTaskFinished()", this, Thread.currentThread());
 
