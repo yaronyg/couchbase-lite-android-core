@@ -497,12 +497,20 @@ public final class Manager {
     public Replication getReplicator(Map<String,Object> properties, Principal principal) throws CouchbaseLiteException {
         // TODO: in the iOS equivalent of this code, there is: {@"doc_ids", _documentIDs}) - write unit test that detects this bug
         // TODO: ditto for "headers"
+        ReplicatorArguments replicatorArguments = new ReplicatorArguments(properties, this, principal); //https://github.com/couchbase/couchbase-lite-java-core/issues/43
+        return getReplicator(replicatorArguments);
+    }
 
+    // We use this to start replications that need our custom HTTP client to handle mutual SSL auth and Tor
+    // This is still all related to https://github.com/couchbase/couchbase-lite-java-core/issues/40
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public Replication getReplicator(ReplicatorArguments replicatorArguments) throws CouchbaseLiteException {
         Authorizer authorizer = null;
         Replication repl = null;
         URL remote = null;
-
-        ReplicatorArguments replicatorArguments = new ReplicatorArguments(properties, this, principal); //https://github.com/couchbase/couchbase-lite-java-core/issues/43
 
         // The authorizer is set here so that the authorizer can alter values in the arguments, primarily source and target
         // to deal with custom URL schemes, before the rest of the processing occurs.
@@ -556,8 +564,8 @@ public final class Manager {
             }
 
             // https://github.com/couchbase/couchbase-lite-java-core/issues/40
-            if (principal != null) {
-                repl.addPrincipal(principal);
+            if (replicatorArguments.getPrincipal() != null) {
+                repl.addPrincipal(replicatorArguments.getPrincipal());
 			}
 
             // https://github.com/couchbase/couchbase-lite-java-core/issues/43
