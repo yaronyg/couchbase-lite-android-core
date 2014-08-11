@@ -46,11 +46,7 @@ public class ReplicatorArguments {
 
     // is this request to be handled by the replication manager?
     private final boolean managedReplication;
-    private final int replicationFrequency;
-    private final int replicationCount;
     public static final String managedReplicationFieldName = "managed_replication";
-    public static final String replicationFrequencyFieldName = "replication_frequency";
-    public static final String replicationCountFieldName = "replication_count";
 
     public ReplicatorArguments(Map<String, Object> properties, Manager manager, Principal principal) throws CouchbaseLiteException {
         // Start taken from manager.java
@@ -97,15 +93,6 @@ public class ReplicatorArguments {
         // is this a managed replication?
         Boolean managedReplicationBoolean = (Boolean)properties.get(managedReplicationFieldName);
         managedReplication = (managedReplicationBoolean != null && managedReplicationBoolean);
-        if(managedReplication) {
-            Integer replicationFrequencyInteger = (Integer)properties.get(replicationFrequencyFieldName);
-            this.replicationFrequency = (replicationFrequencyInteger == null ? 1 : replicationFrequencyInteger.intValue());
-            Integer replicationCountInteger = (Integer)properties.get(replicationCountFieldName);
-            this.replicationCount = (replicationCountInteger == null ? -1 : replicationCountInteger.intValue());
-        } else {
-            this.replicationCount = -1;
-            this.replicationFrequency = -1;
-        }
     }
 
     public Map<String, Object> getRawProperties() { return getRawProperties(true); }
