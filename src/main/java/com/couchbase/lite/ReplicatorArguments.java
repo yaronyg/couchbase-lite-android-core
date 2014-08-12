@@ -44,6 +44,7 @@ public class ReplicatorArguments {
     private final String filterName;
     private final Principal principal;
 
+    // https://github.com/thaliproject/thali/issues/58
     // is this request to be handled by the replication manager?
     private final boolean managedReplication;
     public static final String managedReplicationFieldName = "managed_replication";
@@ -171,39 +172,5 @@ public class ReplicatorArguments {
         Map<String, Object> propertyMap = new HashMap<String, Object>(rawProperties);
         propertyMap.remove(managedReplicationFieldName);
         return propertyMap;
-    }
-
-    public String getPropertiesAsJson() {
-        String json = null;
-        ObjectMapper mapper = new ObjectMapper();
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            mapper.writeValue(baos, this.getRawProperties());
-            json = baos.toString("UTF-8");
-        } catch(JsonGenerationException e) {
-            throw new RuntimeException("Unable to generate json for replication properties", e);
-        } catch (JsonMappingException e) {
-            throw new RuntimeException("Unable to map json in replcation properties", e);
-        } catch(IOException e) {
-            throw new RuntimeException("IO Exception encoding replication properties", e);
-        }
-        return json;
-    }
-
-    public static ReplicatorArguments getReplicatorArgumentsFromJson(String json, Manager manager, Principal principal) throws CouchbaseLiteException {
-        ObjectMapper mapper = new ObjectMapper();
-        Map<String, Object> properties = null;
-        try {
-            ByteArrayInputStream bais = new ByteArrayInputStream(json.getBytes(Charset.forName("UTF-8")));
-            properties = mapper.readValue(bais, new TypeReference<Map<String, Object>>() {
-            });
-        } catch(JsonGenerationException e) {
-            throw new RuntimeException("Unable to generate json for replication properties", e);
-        } catch (JsonMappingException e) {
-            throw new RuntimeException("Unable to map json in replcation properties", e);
-        } catch(IOException e) {
-            throw new RuntimeException("IO Exception encoding replication properties", e);
-        }
-        return new ReplicatorArguments(properties, manager, principal);
     }
 }
