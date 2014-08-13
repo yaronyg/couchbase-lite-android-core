@@ -1,8 +1,18 @@
 package com.couchbase.lite;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.security.Principal;
 import java.util.HashMap;
 import java.util.Map;
+import java.nio.charset.Charset;
+
+import org.codehaus.jackson.JsonGenerationException;
+import org.codehaus.jackson.map.JsonMappingException;
+import org.codehaus.jackson.map.ObjectMapper;
+import org.codehaus.jackson.type.TypeReference;
+
 
 /**
  * Parses the arguments in a replication request so they can be seen and processed identically by both the
@@ -33,6 +43,11 @@ public class ReplicatorArguments {
     private final boolean push;
     private final String filterName;
     private final Principal principal;
+
+    // https://github.com/thaliproject/thali/issues/58
+    // is this request to be handled by the replication manager?
+    private final boolean managedReplication;
+    public static final String managedReplicationFieldName = "managed_replication";
 
     public ReplicatorArguments(Map<String, Object> properties, Manager manager, Principal principal) throws CouchbaseLiteException {
         // Start taken from manager.java
@@ -75,9 +90,13 @@ public class ReplicatorArguments {
         sourceAuth = (Map<String, Object>) sourceMap.get(authFieldName);
         targetAuth = (Map<String, Object>) targetMap.get(authFieldName);
         this.principal = principal;
+
+        // is this a managed replication?
+        Boolean managedReplicationBoolean = (Boolean)properties.get(managedReplicationFieldName);
+        managedReplication = (managedReplicationBoolean != null && managedReplicationBoolean);
     }
 
-    public Map<String, Object> getRawProperties() { return rawProperties; }
+    public Map<String, Object> getRawProperties() { return getRawProperties(true); }
 
     public Map<String, Object> getQueryParams() {
         return queryParams;
@@ -141,5 +160,17 @@ public class ReplicatorArguments {
             result = (Map<String, Object>) value;
         }
         return result;
+    }
+
+    // allow for the filtering of the "managed replication" requests
+    public boolean getManagedReplication() { return managedReplication; }
+
+    public Map<String, Object> getRawProperties(boolean removeManaged) {
+        if((!removeManaged) || (!rawProperties.containsKey(managedReplicationFieldName))) {
+            return rawProperties;
+        }
+        Map<String, Object> propertyMap = new HashMap<String, Object>(rawProperties);
+        propertyMap.remove(managedReplicationFieldName);
+        return propertyMap;
     }
 }
