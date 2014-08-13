@@ -518,6 +518,11 @@ public final class Manager {
         AuthorizerFactoryManager authorizerFactoryManager = options.getAuthorizerFactoryManager();
         authorizer = authorizerFactoryManager == null ? null : options.getAuthorizerFactoryManager().findAuthorizer(replicatorArguments);
 
+        // If we have an authorizer that recognizes that the replication manager will be handling the request
+        if (!authorizer.isWorkNeeded()) {
+            throw new CouchbaseLiteException("no replication needed", new Status(Status.OK));
+        }
+
         Database db;
         String remoteStr;
         // https://github.com/couchbase/couchbase-lite-java-core/issues/43

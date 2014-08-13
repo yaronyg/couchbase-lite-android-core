@@ -33,4 +33,9 @@ public class Authorizer extends AuthenticatorImpl {
     public HttpClientFactory getHttpClientFactory() {
 		return null;
 	}
+
+    /**
+     * If the authorizer will be handling the replication in another way, it may be worth overriding this method.
+     */
+    public boolean isWorkNeeded() { return true; }
 }
