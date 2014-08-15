@@ -44,25 +44,17 @@ task uploadArchivesWrapper(dependsOn: createMavenDirectory) << {
     uploadArchives.execute()
 }
 
-// https://github.com/couchbase/couchbase-lite-java-core/issues/33
-def mavenPath() {
-    artifactory_local == "true" ?
-            'file://' + new File(System.getProperty('user.home'), '.m2/repository').absolutePath :
-            artifactory_contextUrl + "/libs-release-local"
-}
-
 // this will upload, but will not first create a directory (which is needed on some servers)
 uploadArchives {
     repositories {
         mavenDeployer {
 			// https://github.com/couchbase/couchbase-lite-java-core/issues/33
-            repository(url: mavenPath()) {
-                authentication(userName: "${artifactory_user}", password: "${artifactory_password}")
-            //repository(url: System.getenv("MAVEN_UPLOAD_REPO_URL")) {
-            //    authentication(userName: System.getenv("MAVEN_UPLOAD_USERNAME"), password: System.getenv("MAVEN_UPLOAD_PASSWORD"))
+            repository(url: System.getProperty('MAVEN_UPLOAD_REPO_URL')) {
+                authentication(userName: System.getProperty('MAVEN_UPLOAD_USERNAME'), password: System.getProperty('MAVEN_UPLOAD_PASSWORD')) 
             }
-            pom.version = "${System.properties['UPLOAD_VERSION_CBLITE']}"  // https://github.com/couchbase/couchbase-lite-java-core/issues/34
-            //pom.version = System.getenv("MAVEN_UPLOAD_VERSION")
+
+            //pom.version = System.getenv("MAVEN_UPLOAD_VERSION") https://github.com/couchbase/couchbase-lite-java-core/issues/34
+            pom.version = System.getProperty('MAVEN_UPLOAD_VERSION')
             pom.groupId = 'com.couchbase.lite'
             pom.artifactId = 'couchbase-lite-java-core'
             pom.project {
