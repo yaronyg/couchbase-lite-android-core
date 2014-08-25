@@ -5,6 +5,10 @@ apply plugin: 'eclipse'
 
 sourceCompatibility = 1.6
 
+version = System.getProperty('MAVEN_UPLOAD_VERSION')
+group = 'com.couchbase.lite'
+archivesBaseName = 'couchbase-lite-java-core'
+
 repositories {
     mavenLocal()
     maven { url "http://thaliartifactory.cloudapp.net/artifactory/libs-snapshot" }
@@ -54,9 +58,6 @@ uploadArchives {
             }
 
             //pom.version = System.getenv("MAVEN_UPLOAD_VERSION") https://github.com/couchbase/couchbase-lite-java-core/issues/34
-            pom.version = System.getProperty('MAVEN_UPLOAD_VERSION')
-            pom.groupId = 'com.couchbase.lite'
-            pom.artifactId = 'couchbase-lite-java-core'
             pom.project {
                 licenses {
                     license {
