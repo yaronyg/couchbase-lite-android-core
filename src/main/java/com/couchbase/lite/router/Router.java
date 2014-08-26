@@ -601,7 +601,14 @@ public class Router implements Database.ChangeListener {
             replicator = manager.getReplicator(body, connection.getPrincipal()); // https://github.com/couchbase/couchbase-lite-java-core/issues/40
         } catch (CouchbaseLiteException e) {
             Map<String, Object> result = new HashMap<String, Object>();
-            result.put("error", e.toString());
+            // This is custom Thali logic. When we receive a request for the replication manager we just return
+            // success and start up the replication later. So right now if a request is for the replication manager then
+            // we will throw an exception with a 200 status. We need to return ok so Ektorp will be happy.
+            if (e.getCBLStatus().isSuccessful()) {
+                result.put("ok", true);
+            } else {
+                result.put("error", e.toString());
+            }
             connection.setResponseBody(new Body(result));
             return e.getCBLStatus();
         }

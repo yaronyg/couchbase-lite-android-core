@@ -519,7 +519,7 @@ public final class Manager {
         authorizer = authorizerFactoryManager == null ? null : options.getAuthorizerFactoryManager().findAuthorizer(replicatorArguments);
 
         // If we have an authorizer that recognizes that the replication manager will be handling the request
-        if (!authorizer.isWorkNeeded()) {
+        if (authorizer != null && authorizer.isWorkNeeded() == false) {
             throw new CouchbaseLiteException("no replication needed", new Status(Status.OK));
         }
 
@@ -532,8 +532,7 @@ public final class Manager {
         } else {
             remoteStr = replicatorArguments.getSource();
             if(replicatorArguments.getCreateTarget() && !replicatorArguments.getCancel()) {
-				boolean mustExist = false;
-                db = getDatabaseWithoutOpening(replicatorArguments.getTarget(), mustExist);
+                db = getDatabaseWithoutOpening(replicatorArguments.getTarget(), false);
                 if(!db.open()) {
                     throw new CouchbaseLiteException("cannot open database: " + db, new Status(Status.INTERNAL_SERVER_ERROR));
                 }
